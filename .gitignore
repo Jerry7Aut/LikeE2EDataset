@@ -21,3 +21,6 @@ Thumbs.db
 
 # --- Claude / 本地状态 ---
 .claude/
+
+.env
+temp/
