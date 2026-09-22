@@ -24,3 +24,6 @@ Thumbs.db
 
 .env
 temp/
+
+# 各漏洞的测试结果文件夹（保留 results/ 下的说明文件）
+/datasetLikeE2e/samples/*/results/*/
