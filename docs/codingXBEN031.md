@@ -65,7 +65,6 @@ datasetLikeE2e/samples/CVE-2021-41773/
 │   ├── Makefile
 │   ├── .env.example
 │   ├── docker-compose.yml
-│   ├── docker-compose.legacy.yml   # 原始单容器环境（仅人工调试）
 │   ├── apache/                     # httpd:2.4.49 + 原始 httpd.conf + cgi-bin + htdocs
 │   ├── security_gateway/           # 唯一策略执行点 + 唯一蓝队观测点
 │   ├── shared_egress/              # 透明 TCP 共享出口
