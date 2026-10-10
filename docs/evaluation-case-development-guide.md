@@ -86,7 +86,7 @@ samples/<CASE_ID>/
 
 ## 3. 统一入口和执行方式
 
-所有命令从 Case 根目录执行。Python 入口是权威执行入口，Makefile 为薄封装。WSL 环境沿用 `/mnt/d/codingSpace/venv/bin/python`，其他机器通过 `PYTHON` 选择已有 Python 3 环境。宿主机评测器当前主要使用标准库；容器内依赖由 Dockerfile 固定。Docker Compose 必须支持顶层 `include`，先用 `docker compose config --quiet` 验证。
+所有命令从 Case 根目录执行。Python 入口是权威执行入口，Makefile 为薄封装。WSL 环境沿用 `~/venv/bin/python`，其他机器通过 `PYTHON` 选择已有 Python 3 环境。宿主机评测器当前主要使用标准库；容器内依赖由 Dockerfile 固定。Docker Compose 必须支持顶层 `include`，先用 `docker compose config --quiet` 验证。
 
 ### 3.1 正式评测
 
@@ -94,7 +94,7 @@ samples/<CASE_ID>/
 
 ```bash
 cd /home/kali/LikeE2EDataset/datasetLikeE2e/samples/CVE-2021-41773
-/mnt/d/codingSpace/venv/bin/python evaluator/run_evaluation.py \
+~/venv/bin/python evaluator/run_evaluation.py \
   --case CVE-2021-41773 --model qwen3.8
 ```
 
@@ -122,7 +122,7 @@ python evaluator/run_evaluation.py --case CVE-2021-41773 --model qwen3.8
 Make 封装也有相同的阶段来源默认值：
 
 ```bash
-make full PYTHON=/mnt/d/codingSpace/venv/bin/python RUN_ID=example-001
+make full PYTHON=~/venv/bin/python RUN_ID=example-001
 ```
 
 当前 Makefile 未提供模型别名选择参数；需要指定 `.env` 中某个模型配置段时使用上面的 Python 入口。`make full` 使用默认模型配置，并在 RUN_ID 后追加 `-unified`，此例输出到 `results/example-001-unified/`；直接 Python 调用则精确使用 `--run-id`。每轮使用新的 ID，避免覆盖已有证据。不要为复核原报告而复用它的 ID。
@@ -132,10 +132,10 @@ make full PYTHON=/mnt/d/codingSpace/venv/bin/python RUN_ID=example-001
 ### 3.2 无模型标定和工程自检
 
 ```bash
-make lint PYTHON=/mnt/d/codingSpace/venv/bin/python
-make smoke PYTHON=/mnt/d/codingSpace/venv/bin/python RUN_ID=example-smoke-001
-make whitebox-selftest PYTHON=/mnt/d/codingSpace/venv/bin/python RUN_ID=example-wb-001
-make calibrate PYTHON=/mnt/d/codingSpace/venv/bin/python \
+make lint PYTHON=~/venv/bin/python
+make smoke PYTHON=~/venv/bin/python RUN_ID=example-smoke-001
+make whitebox-selftest PYTHON=~/venv/bin/python RUN_ID=example-wb-001
+make calibrate PYTHON=~/venv/bin/python \
   RUN_ID=example-cal-001 RED_MODE=reference POC_MODE=reference PATCH_MODE=gt
 ```
 
