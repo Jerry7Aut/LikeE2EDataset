@@ -320,3 +320,11 @@
 组 11 的 crash 项需要 ASAN 构建并设置溢出即 abort，否则部分漏洞在普通构建下不一定退出进程。flag 项可直接经网关触发，或按 24928 的方式包装成 HTTP 服务。
 
 **已完成补充**：CVE-2021-43798 Grafana 8.2.0，插件静态资源路径穿越，flag。
+
+**已完成**：CVE-2021-21234 Spring Boot Actuator 日志查看器（`eu.hinsch:spring-boot-actuator-logview` 0.2.12）`base` 参数路径穿越，flag，标定 1.0 ✅
+
+**已完成**：CVE-2019-3799 Spring Cloud Config Server 2.1.0 资源端点路径穿越，flag，标定 1.0 ✅
+
+**已完成**：CVE-2022-22947 Spring Cloud Gateway 3.1.0 Actuator SpEL 注入，flag，标定 1.0 ✅
+
+**已完成**：CVE-2022-42889 Apache Commons Text 1.9 插值 RCE（Text4Shell），flag，标定 1.0 ✅
