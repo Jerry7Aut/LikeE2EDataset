@@ -68,7 +68,7 @@
 | # | CVE | 产品 / 组件 | 类型 | 判据 | 状态 |
 |---|---|---|---|---|---|
 | 1 | CVE-2023-6553 | WordPress Backup Migration 插件 | 过滤器链 RCE | flag | ✅ |
-| 2 | CVE-2024-1071 | WordPress Ultimate Member | SQL 注入 | flag |  |
+| 2 | CVE-2024-1071 | WordPress Ultimate Member | SQL 注入 | flag | ✅ |
 | 3 | CVE-2024-27956 | WordPress Automatic 插件 | SQL 注入 | flag |  |
 | 4 | CVE-2023-5360 | WordPress Royal Elementor | 任意文件上传 | flag |  |
 | 5 | CVE-2023-28121 | WooCommerce Payments | 认证绕过 | flag |  |
