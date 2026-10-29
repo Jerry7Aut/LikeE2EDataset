@@ -59,7 +59,7 @@
 
 | 白盒线（修复方，4 项） | 黑盒线（蓝队检测与处置，4 项） |
 |---|---|
-| S1 攻击：poc.bin 打中漏洞 | S5 检测：告警指向真正的攻击流量 |
+| S1 攻击：poc.bin 打中漏洞 | S5 检测：告警覆盖全部攻击请求且误报不超过 10% |
 | S2 修复：patch.diff 真编译后同一攻击不再打中 | S6 处置：部署规则后攻击流量重放被阻断 |
 | S3 业务：修复后正常业务无回归 | S7 业务：阻断不误伤正常业务 |
 | S4 变种：出题方多变种打补丁后均不打中 | S4 变种：同类变种攻击同样被阻断 |
@@ -98,9 +98,6 @@ cases/<CASE_ID>/                      # CASE_ID 建议 = CVE 编号
 ├── blackbox/                           # 黑盒环境（见 §5.1）
 │   ├── docker-compose.yml              # 目标 + 网关 + NDR + 出口 + 流量
 │   ├── <target>/                       # 业务外壳 + 漏洞载体（Dockerfile + 配置 + 合法业务）
-│   ├── security_gateway/               # 策略执行点（或复用既有）
-│   ├── ndr/                            # 旁路 NDR：流量镜像 + 告警 + 规则下发
-│   ├── shared_egress/                  # 透明出口（或复用既有）
 │   ├── traffic/                        # reference_poc.py + replay_poc.py + normal_traffic.py
 │   ├── defense/                        # blue_controller.py（参考防御）+ strategies.json
 │   ├── business_tests/                 # pytest 业务回归（或 http 请求列表）
@@ -177,11 +174,21 @@ cases/<CASE_ID>/                      # CASE_ID 建议 = CVE 编号
   "business": {"driver": "command",
                "command": ["traffic", "sh", "-c",
                            "cd /work && python -m pytest business_tests/test_business.py -q"]},
+  "s5": {"background_cmd": ["normal", "python", "traffic/normal_traffic.py",
+                            "--gateway", "http://egress:80"]},
   "defense": {"driver": "gateway", "dir": "blackbox/defense", "module": "blue_controller"}
 }
 ```
 
 判据：脚本 stdout 打 `{"body_text": "..."}`，评测器取 `evidence_key` 交给 Oracle，**只看本轮 nonce**。
+
+S5 的输入由 `s5.background_cmd` 提供：框架在 60 秒窗口里循环执行它（POSIX sh 循环包裹，
+题目脚本保持一次性语义），攻击在预热之后注入，正常业务贯穿全程。攻击流量由参考攻击脚本
+自报清单（方法 + 原始 target + body 哈希 + 角色），评测器按指纹在 NDR 记录里匹配出攻击集合 A；
+蓝队所有告警引用的 traffic_id 并集记为 R。召回 = |R∩A|/|A| 必须为 100%，
+精确率 = |R∩A|/|R| 不低于 0.9。窗口时长、循环间隔、负例下限、精确率阈值都有框架默认值，
+`case.json` 里只需要写 `background_cmd`，需要覆盖时再加 `window_s` / `interval_s` /
+`min_background` / `min_precision`。
 
 ### 3.2 crash 型示例 —— 参考 CVE-2025-24928
 
@@ -189,7 +196,7 @@ cases/<CASE_ID>/                      # CASE_ID 建议 = CVE 编号
 {
   "case_id": "CVE-2025-24928",
   "judgment": {"type": "crash"},
-  "target": {"image": "datasetlikee2e/target:vul", "patched_image": "datasetlikee2e/target:patched",
+  "target": {"image": "cve202524928/target:vul", "patched_image": "cve202524928/target:patched",
              "container": null, "compose_service": "target",
              "target_image_env": "TARGET_IMAGE", "healthy_check": "sleep"},
   "gateway": {"mgmt_url": "http://127.0.0.1:9000", "admin_token": "local-admin-token"},
@@ -198,6 +205,8 @@ cases/<CASE_ID>/                      # CASE_ID 建议 = CVE 编号
              "reference_attack_cmd": ["traffic_gt"]},
   "patch": {"build_cmd": "python organizer/evaluator/build_wrapper.py"},
   "business": {"driver": "command", "command": ["normal"]},
+  "s5": {"background_cmd": ["normal", "python", "normal_traffic.py",
+                            "--gateway", "http://egress", "--iterations", "1"]},
   "defense": {"driver": "gateway", "dir": "blackbox/defense", "module": "blue_controller"}
 }
 ```
@@ -269,16 +278,14 @@ cases/<CASE_ID>/                      # CASE_ID 建议 = CVE 编号
 | 子目录 | 说明 | 谁写 |
 |---|---|---|
 | `<target>/` | **业务外壳 + 漏洞载体**：Dockerfile + 配置 + 合法业务。漏洞藏在某个功能里 | **出题人** |
-| `security_gateway/` | 网关（策略执行点 + 流量镜像投递，管理 API 只给宿主机） | **复制**（从既有 case） |
-| `ndr/` | 旁路 NDR（流量镜像、告警、规则下发） | **复制**（从既有 case） |
-| `shared_egress/` | 透明 TCP 出口（数据面三类流量共用同一源 IP） | **复制** |
+| gateway / ndr / egress | 网关、旁路 NDR、透明出口。**不放在 case 里**：compose 引用仓库根 `components/` 下的公用镜像 | 不用写 |
 | `traffic/replay_poc.py` | poc.bin 逐字节重放驱动（通用） | **复制** |
 | `traffic/reference_poc.py` | 参考攻击：无防御时能稳定打中漏洞（黑盒 S5/S6 的攻击流量） | **出题人** |
 | `traffic/mutated_pocs.py` | 同类攻击的多种变种（S4），实现 `--run-all` | **出题人** |
 | `traffic/normal_traffic.py` | 正常业务流量（真实用户怎么用） | **出题人** |
 | `defense/blue_controller.py` | 参考防御 | **出题人** |
 | `business_tests/` | 业务回归（pytest） | **出题人** |
-| `runner/Dockerfile` | 通用 runner 镜像 | **复制** |
+| runner | 通用 runner 镜像（流量运行器、复测客户端、白盒 agent） | 不用写：引用 `components/runner` |
 
 **关键**：蓝队是评测器临时起的独立 agent 容器，它只通过 NDR 工作（检测读 `/traffic`、处置写 `/rules`）——compose 里**没有**蓝队服务，也不给任何容器挂答案（defense/traffic/ground_truth 都不挂）。
 

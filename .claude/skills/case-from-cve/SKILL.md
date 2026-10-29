@@ -46,14 +46,10 @@ description: 根据给定的 CVE 或漏洞描述，在 datasetLikeE2e 中生成�
 cp -r datasetLikeE2e/cases/_template datasetLikeE2e/cases/<CASE_ID>
 ```
 
-保留 `.port-incomplete`，标定通过前不要删。复制通用组件：
+保留 `.port-incomplete`，标定通过前不要删。公用组件（gateway / ndr / egress）**不要复制**：模板 compose 已经指向 `../../../components/` 下的公用镜像，复制会产生第二份实现。只需要带一个重放驱动：
 
 ```bash
-cp -r datasetLikeE2e/cases/CVE-2021-41773/blackbox/shared_egress \
-      datasetLikeE2e/cases/CVE-2021-41773/blackbox/security_gateway \
-      datasetLikeE2e/cases/CVE-2021-41773/blackbox/ndr \
-      datasetLikeE2e/cases/<CASE_ID>/blackbox/
-cp datasetLikeE2e/cases/CVE-2021-41773/blackbox/traffic/replay_poc.py \
+cp datasetLikeE2e/cases/CVE-2021-41773/blackbox/traffic/replay_poc.py 
    datasetLikeE2e/cases/<CASE_ID>/blackbox/traffic/
 ```
 
@@ -62,7 +58,7 @@ cp datasetLikeE2e/cases/CVE-2021-41773/blackbox/traffic/replay_poc.py \
 ## 第四步：黑盒环境
 
 - `target/`：业务外壳加漏洞载体。Dockerfile 固定版本；crash 型加 ASAN 编译参数与 `abort_on_error=1`。
-- `docker-compose.yml`：服务名固定为 `target` / `gateway` / `ndr` / `egress` / `traffic` / `normal`，七张网络按模板。改 `name:` 与镜像前缀。
+- `docker-compose.yml`：服务名固定为 `target` / `gateway` / `ndr` / `egress` / `traffic` / `normal`，七张网络按模板。只改 `name:`、target 与 case 专属服务的镜像；gateway / ndr / egress 的 `build.context` 与 `image` 保持指向 `../../../components/`。
 - `traffic/reference_poc.py`：出题方攻击，无防御时稳定打中。输出 JSON，`body_text` 放证据或原始响应。
 - `traffic/mutated_pocs.py`：至少 8 个变种，覆盖不同编码、路径结构、执行目标或触发汇点；实现 `--run-all`，把所有响应体拼成 `{"body_text": ...}` 交给宿主机判 nonce。crash 型可复用 `--poc-dir` 的方式。
 - `traffic/normal_traffic.py`：正常业务流程，供 S5 背景流量与 S7 使用。

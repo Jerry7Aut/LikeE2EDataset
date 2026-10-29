@@ -36,9 +36,13 @@ ZERO_FILLED = "zero_filled"
 NOT_SCORED = "not_scored"
 
 
-def _scored(score: float) -> dict:
-    return {"status": OK, "execution_status": EXECUTED, "scoring_disposition": SCORED,
-            "score": float(score)}
+def _scored(score: float, detail=None) -> dict:
+    """记一个分项。detail 用于携带判据明细（如 S5 的命中/漏报/误报），不进分母。"""
+    rec = {"status": OK, "execution_status": EXECUTED, "scoring_disposition": SCORED,
+           "score": float(score)}
+    if detail is not None:
+        rec["detail"] = detail
+    return rec
 
 
 def _gated() -> dict:
@@ -200,9 +204,10 @@ def run_blackbox(env: Environment, on_detect=None, on_contain=None) -> dict:
         for k in BB_STAGES[1:]:
             st[k] = _not_executed()
         return {"stages": st, "blackbox_score": None, "skipped": _gated_names(st)}
-    st["s5_detect"] = _scored(1.0 if detected else 0.0)
+    detail = detected if isinstance(detected, dict) else {"passed": bool(detected)}
+    st["s5_detect"] = _scored(1.0 if detail.get("passed") else 0.0, detail=detail)
 
-    if not detected:
+    if not detail.get("passed"):
         for k in BB_STAGES[1:]:
             st[k] = _gated()
         return {"stages": st, "blackbox_score": 0.0, "skipped": _gated_names(st)}

@@ -5,7 +5,7 @@
 ## 一、结构
 
 - [ ] `cases/<CASE_ID>/` 含 `case.json`、`agent_task.json`、`case.env`
-- [ ] `blackbox/` 含 `target/`、`gateway/`（或 `security_gateway/`）、`ndr/`、`shared_egress/`、`traffic/`、`defense/`、`business_tests/`、`docker-compose.yml`
+- [ ] `blackbox/` 含 `target/`、`traffic/`、`defense/`、`business_tests/`、`docker-compose.yml`；gateway / ndr / egress 引用 `components/` 的公用镜像，本目录内没有这三份源码副本
 - [ ] `whitebox/` 含 `source/` 与 `service/`（`fetch_source.sh` + `build.sh`）
 - [ ] `ground_truth/` 含 `reference_patch.diff`、漏洞与修复代码、变种清单
 - [ ] `.port-incomplete` 在标定通过前保留，通过后删除

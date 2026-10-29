@@ -169,6 +169,22 @@ def _check_case_json(case, errs):
         errs.append(f"business.driver 必须是 command，实际 {biz.get('driver')!r}")
     if not biz.get("command"):
         errs.append("business 缺 command（dc run 参数列表）")
+
+    s5 = cfg.get("s5") or {}
+    bg = s5.get("background_cmd") or []
+    if not bg:
+        errs.append("s5 缺 background_cmd（S5 窗口内必须持续产生正常业务流量）")
+    elif len(bg) < 2:
+        errs.append("s5.background_cmd 需要 [compose 服务名, 容器内命令...]")
+    if "window_s" in s5 and float(s5["window_s"]) <= 0:
+        errs.append("s5.window_s 必须为正（背景流量的持续秒数）")
+    if "warmup_s" in s5 and float(s5["warmup_s"]) < 0:
+        errs.append("s5.warmup_s 不能为负")
+    if "min_background" in s5 and int(s5["min_background"]) < 10:
+        errs.append("s5.min_background 至少 10（负例太少，检测判据没有区分力）")
+    if "min_precision" in s5 and not (0 < float(s5["min_precision"]) <= 1.0):
+        errs.append("s5.min_precision 必须在 (0, 1] 内")
+
     if not (cfg.get("defense") or {}).get("driver"):
         errs.append("defense 缺 driver")
 

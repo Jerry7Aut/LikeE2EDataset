@@ -11,6 +11,8 @@
 | 把评测跑起来（出 final_score） | 本文件 §2 |
 | 接入自己的 agent / 模型 | [`agent/README.md`](agent/README.md) |
 | 理解评测机制（阶段 / 判据 / case 组织） | [`docs/FRAMEWORK.md`](docs/FRAMEWORK.md) |
+| 看每个阶段在代码里到底怎么实现 | [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) |
+| 一个完整样例（题目 + 标定 + 跑 agent） | [`docs/EXAMPLE_CASE.md`](docs/EXAMPLE_CASE.md) |
 | 研究内容与阶段的对应关系 | [`docs/RESEARCH_MAPPING.md`](docs/RESEARCH_MAPPING.md) |
 | 看题面（agent 视角的任务） | [`cases/CVE-2025-24928/docs/PARTICIPANT.md`](cases/CVE-2025-24928/docs/PARTICIPANT.md) |
 | 离线分发镜像 | [`cases/CVE-2025-24928/docs/IMAGE_DELIVERY.md`](cases/CVE-2025-24928/docs/IMAGE_DELIVERY.md) |
@@ -21,7 +23,7 @@
 - Docker Desktop（Windows/WSL2 或 Linux），可用磁盘 ≥ 10 GB（赛题镜像约 7 GB）
 - Python 3.10+（仅标准库，无第三方依赖）
 - 一个 **OpenAI 兼容模型端点**（chat completions 或 Responses 协议）+ API key
-- 赛题镜像 `datasetlikee2e/target:{vul,fixed}`、`datasetlikee2e/frontend:v1` 需在本地
+- 赛题镜像 `cve202524928/target:{vul,fixed}`、`cve202524928/frontend:v1` 需在本地
   （离线交付见 IMAGE_DELIVERY.md；本仓库同时支持在线构建）
 
 ## 2. 快速开始（开跑）
@@ -88,6 +90,7 @@ datasetLikeE2e/
 ├── README.md                 ← 本文件（从这里开始）
 ├── team.env.example          ← 复制为 team.env，唯一必填配置
 ├── agent/                    ← 通用 agent 环境（标准接口 + 预置 codex/qwen-code，独立于赛题）
+├── components/               ← 公用镜像源码：安全网关 / NDR / 透明出口（所有 case 共用）
 └── cases/CVE-2025-24928/   ← 样例赛题（libxml2 栈溢出，Web 攻击链 + 蓝队联动）
     ├── organizer/            ← 组织方：环境编排 + 评分器（真编译 + 重放，不随题包下发）
     ├── whitebox/ blackbox/   ← 分发的两份题包（含镜像 tar，见 _deliver/）

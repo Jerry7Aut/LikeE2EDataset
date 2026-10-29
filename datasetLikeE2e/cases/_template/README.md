@@ -25,7 +25,8 @@
 | `case.json` | **必须写**：评测配置（判据/重放/补丁/业务/防御，见 schema §3） |
 | `agent_task.json` | **必须写**：白盒攻击者与两段蓝队题面（见 schema §4） |
 | `case.env` | **必须写**：网络拓扑（见 schema §5.4 / §5.5） |
-| `blackbox/security_gateway/`、`blackbox/ndr/`、`shared_egress/`、`traffic/replay_poc.py`、`runner/Dockerfile` | **通用组件**，可从任意既有 case（如 CVE-2021-41773）原样复制 |
+| `traffic/replay_poc.py` | 可从任意既有 case（如 CVE-2021-41773）原样复制 |
+| gateway / ndr / egress / runner | **不用复制**：compose 直接引用 `../../../components/` 下的公用镜像，见 `components/README.md` |
 | `blackbox/docker-compose.yml` | 拓扑骨架（复制改名字即可，服务/网络结构固定） |
 | `blackbox/target/`（业务外壳 + 漏洞载体） | **必须搭** |
 | `blackbox/traffic/reference_poc.py`（攻击链）、`normal_traffic.py`（正常业务） | **必须写** |

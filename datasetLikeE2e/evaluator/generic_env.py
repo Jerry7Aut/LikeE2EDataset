@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(DATASET_DIR, "agent"))
 from evaluate import Environment, run_whitebox, run_blackbox, run_all       # noqa: E402
 from retry import InfrastructureError                                       # noqa: E402
 from oracle import Oracle                                                   # noqa: E402
+import s5_judge                                                             # noqa: E402
 import envfile                                                              # noqa: E402
 import gen_squid                                                            # noqa: E402
 import host_run                                                             # noqa: E402
@@ -127,6 +128,16 @@ class ConfigEnvironment(Environment):
                 f"（一次容器跑一条命令，退出码 0 = 业务无回归）")
         self.business_command = b.get("command", [])           # dc run 参数列表
 
+        # S5 检测窗口：背景业务持续产生，攻击夹在中间。没有背景流量就没有负例，
+        # 「把每条流量都告警」会直接过关，所以背景流量是判分前提，缺了就是设施问题。
+        s5 = self.cfg.get("s5", {})
+        self.s5_background_cmd = s5.get("background_cmd") or []
+        self.s5_window_s = float(s5.get("window_s", 60))
+        self.s5_warmup_s = float(s5.get("warmup_s", 5))
+        self.s5_interval_s = float(s5.get("interval_s", 1.5))
+        self.s5_min_background = int(s5.get("min_background", 30))
+        self.s5_min_precision = float(s5.get("min_precision", s5_judge.DEFAULT_MIN_PRECISION))
+
         d = self.cfg.get("defense", {})
         self.defense_driver = d.get("driver", "gateway")       # 只支持 gateway，见下方校验
         # blue_controller 型蓝队已废弃：它的观测点是应用日志全文、/detect 只回一个
@@ -143,7 +154,9 @@ class ConfigEnvironment(Environment):
 
         self._with_egress = with_egress
         self._oracle = Oracle(run_id=time.strftime("%Y%m%d-%H%M%S"))
-        self._attack_traffic_ids = []
+        self._attack_ids = []        # 本次攻击的 traffic_id（由参考攻击自报清单匹配得到）
+        self._normal_ids = []        # 同一窗口内的正常业务 traffic_id
+        self._known_ids = set()      # NDR 里本轮出现过的全部 traffic_id
         self._defender_mode = "reference"
         self._track = "whitebox"
         self.calibrate = False   # --calibrate 时置 True：S1/S2 改用参考 PoC 自检
@@ -174,6 +187,41 @@ class ConfigEnvironment(Environment):
                            errors="replace", timeout=timeout, env=env)
         _raise_on_daemon_error(r, args)
         return r
+
+    def dc_bg(self, args, image=None):
+        """后台起一个 compose run（背景业务流量），返回 Popen。
+
+        输出丢弃：循环跑业务命令会产生大量日志，PIPE 写满会把容器堵死、
+        流量随之中断。背景流量是否成功由 NDR 记录数判定，不靠输出。
+        """
+        env = dict(os.environ)
+        tag = image or self.image
+        if tag and self.target_image_env:
+            env[self.target_image_env] = tag
+        return subprocess.Popen(
+            ["docker", "compose", "-f", self.compose_file] + args,
+            cwd=self.case_dir, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, env=env)
+
+    def _background_run_args(self):
+        """把 s5.background_cmd 包成「窗口内循环跑」的一次性容器命令。
+
+        background_cmd = [compose 服务名, 容器内命令...]，框架在外面套一层
+        POSIX sh 循环，题目脚本保持一次性语义（不需要 --loop）。
+        """
+        cmd = list(self.s5_background_cmd)
+        if len(cmd) < 2:
+            raise InfrastructureError(
+                "s5.background_cmd 需要 [compose 服务名, 容器内命令...]，"
+                "只给服务名时框架无法循环运行")
+        service, rest = cmd[0], cmd[1:]
+        inner = " ".join(shlex.quote(x) for x in rest)
+        rounds = max(1, int(round(self.s5_window_s / max(self.s5_interval_s, 0.1))))
+        loop = (
+            f"i=0; while [ $i -lt {rounds} ]; do sh -c {shlex.quote(inner)}; "
+            f"i=$((i+1)); sleep {self.s5_interval_s}; done"
+        )
+        return ["run", "--rm", service, "sh", "-c", loop]
 
     def dsh(self, container, cmd, timeout=120):
         return subprocess.run(["docker", "exec", container, "sh", "-c", cmd],
@@ -387,48 +435,120 @@ class ConfigEnvironment(Environment):
         return r.returncode == 0
 
     def prepare_attack_traffic(self) -> None:
-        """出题人提供攻击流量，经共享出口 → 网关 → NDR。
+        """S5 的输入：一段持续产生正常业务的流量窗口，攻击夹在中间。
 
-        S5 的输入是「网络层观测到的流量」，所以这里必须先有正常业务流量再做攻击：
-        只有攻击流量的话，「把每条流量都告警」就能满分，检测没有区分度。
-        攻击窗口用时间戳切分，窗口内产生的 traffic_id 就是 S5 的核对基准。
+        背景业务在窗口内一直有流量，攻击在预热之后注入，因此攻击记录前后
+        都还有正常业务记录——蓝队不能靠「最后几条」「时间靠后的那批」猜。
+        攻击流量由参考攻击脚本自报清单（方法 + 原始 target + 请求体哈希），
+        评测器按指纹在 NDR 记录里匹配，不依赖时间窗里「全部记录都是攻击」。
         """
+        if not self.s5_background_cmd:
+            raise InfrastructureError(
+                "case.json 缺 s5.background_cmd：S5 需要贯穿整个窗口的正常业务流量")
+        if not self.reference_attack_cmd:
+            raise InfrastructureError("case.json 缺 replay.reference_attack_cmd")
+
         self._set_phase("S5")
         self._ndr("POST", "/reset", token=self.ndr_admin_token, timeout=20)
         self._ensure_target_alive()
 
-        # 背景正常业务：best-effort，失败不影响判分（业务回归由 S7/S3 单独判）
-        if self.business_command:
-            try:
-                self.dc(["run", "--rm"] + self.business_command, timeout=600)
-            except Exception as e:
-                print(f"[generic_env] 背景业务流量未发出（不判分）：{e}")
-        time.sleep(1)
-
         mark = time.time()
-        self._run_script(self.reference_attack_cmd)
+        bg = self.dc_bg(self._background_run_args())
+        # crash 型的攻击会把目标打挂，攻击之后的业务请求到不了网关；
+        # 负例必须在攻击前积累够，所以预热时间按 crash 型加长。
+        warmup = self.s5_warmup_s
+        if self.judgment == "crash":
+            warmup = max(warmup, 20.0)
+        time.sleep(warmup)
 
-        ids = []
-        for _ in range(40):
+        t_start = time.time()
+        ok, out = self._run_script(self.reference_attack_cmd)
+        t_end = time.time()
+        if not ok:
+            print("[generic_env] 参考攻击退出码非 0（S5 只看流量，不要求打中）")
+
+        try:
+            bg_rc = bg.wait(timeout=self.s5_window_s + 180)
+        except subprocess.TimeoutExpired:
+            bg.kill()
+            raise InfrastructureError(
+                f"背景业务流量未在 {self.s5_window_s + 180:.0f}s 内结束（设施问题）")
+        if bg_rc != 0:
+            # crash 型 case 的攻击会把目标打挂，之后的业务请求本来就到不了；
+            # 背景是否够用由下面的 NDR 记录数判定，不看退出码。
+            print(f"[generic_env] 背景业务循环退出码 {bg_rc}（以 NDR 记录数为准）")
+
+        records = self._wait_traffic_settle(mark)
+        manifest = s5_judge.parse_manifest(out)
+        if not manifest:
+            raise InfrastructureError(
+                "参考攻击的 requests 清单缺失或为空，无法标注攻击流量（题目缺陷）")
+        attack_ids, _benign_ids, missing, ambiguous = s5_judge.match_attack_ids(
+            records, manifest, t_start, t_end)
+        if missing:
+            raise InfrastructureError(
+                f"攻击请求未在 NDR 中匹配到（镜像丢失或清单与请求不一致）：{missing[:3]}")
+        if ambiguous:
+            raise InfrastructureError(
+                "攻击请求与同时段背景流量指纹相同，无法可靠标注攻击流量"
+                f"（题目缺陷，需让攻击请求与背景业务可区分）：{ambiguous}")
+        if not attack_ids:
+            raise InfrastructureError("攻击流量集合为空：镜像投递未生效（设施问题）")
+
+        known = {str(r.get("traffic_id")) for r in records if r.get("traffic_id")}
+        normal_ids = known - set(attack_ids)
+        if len(normal_ids) < self.s5_min_background:
+            raise InfrastructureError(
+                f"背景业务流量只有 {len(normal_ids)} 条，少于下限 {self.s5_min_background}："
+                f"负例不足，S5 判据不可信")
+
+        by_id = {str(r.get("traffic_id")): r for r in records}
+        atk_ts = [float(by_id[i].get("ts") or 0) for i in attack_ids]
+        other_ts = [float(by_id[i].get("ts") or 0) for i in normal_ids]
+        mixed = min(other_ts) < min(atk_ts)
+        if self.judgment != "crash":
+            # flag 型：攻击后业务还在继续，必须两头都有记录。
+            # crash 型的攻击会把目标打挂，攻击之后的业务请求到不了网关，
+            # 只要求攻击前有业务记录。
+            mixed = mixed and max(other_ts) > max(atk_ts)
+        if not mixed:
+            raise InfrastructureError(
+                "攻击流量没有夹在业务流量中间：背景容器与攻击没有并发（设施问题）")
+
+        self._attack_ids = attack_ids
+        self._normal_ids = sorted(normal_ids)
+        self._known_ids = known
+        print(f"[generic_env] S5 流量窗口：攻击 {len(attack_ids)} 条，"
+              f"正常业务 {len(normal_ids)} 条")
+
+    def _wait_traffic_settle(self, mark: float, stable_polls: int = 2,
+                             max_polls: int = 80, delay: float = 0.5):
+        """等 NDR 把窗口内的镜像消化完：连续几次轮询记录数不再增长即认为稳定。"""
+        last = -1
+        stable = 0
+        items = []
+        for _ in range(max_polls):
             try:
                 res = self._ndr("GET", f"/traffic?since={mark}", token=self.ndr_admin_token)
             except Exception as e:
                 raise InfrastructureError(f"读取 NDR 流量失败：{e}")
-            ids = [t.get("traffic_id") for t in (res.get("traffic") or []) if t.get("traffic_id")]
-            if ids:
-                break
-            time.sleep(0.5)
-        if not ids:
-            raise InfrastructureError(
-                "攻击流量未进入 NDR：网关镜像投递未生效（设施问题，本次不计分）")
-        self._attack_traffic_ids = ids
-        print(f"[generic_env] 攻击窗口内 NDR 记录 {len(ids)} 条")
+            items = res.get("traffic") or []
+            if len(items) == last:
+                stable += 1
+                if stable >= stable_polls:
+                    return items
+            else:
+                stable = 0
+                last = len(items)
+            time.sleep(delay)
+        return items
 
-    def detect(self) -> bool:
-        """S5：蓝队提交的告警是否命中本次攻击流量。
+    def detect(self) -> dict:
+        """S5：按集合口径判定蓝队的检测结果。
 
-        判据要求「告警主要指向攻击流量」（命中数 ≥ 引用总数的一半）：
-        全量告警、把正常业务一起报上来不算检出，否则检测没有区分力。
+        R = 所有告警 traffic_ids 的并集；A = 攻击请求的 traffic_id 集合。
+        召回必须 100%，精确率不低于 s5.min_precision（默认 90%）。
+        取并集而不是逐条告警判分，封死「每条流量各报一条告警」的绕过路径。
         """
         if self._defender_mode == "reference":
             self._ref_blue_action("detect")
@@ -437,17 +557,17 @@ class ConfigEnvironment(Environment):
         except Exception as e:
             raise InfrastructureError(f"读取 NDR /alerts 失败: {e}")
         items = res.get("alerts") or []
-        known = set(self._attack_traffic_ids)
-        if not known:
-            return False
+        refs = []
         for a in items:
-            refs = [str(x) for x in (a.get("traffic_ids") or [])]
-            if not refs:
-                continue
-            hits = [x for x in refs if x in known]
-            if hits and len(hits) * 2 >= len(refs):
-                return True
-        return False
+            ids = a.get("traffic_ids") or []
+            if isinstance(ids, str):   # 单个 id 写成字符串也算一条，不按字符拆
+                ids = [ids]
+            refs.extend(str(x) for x in ids)
+        out = s5_judge.judge(refs, self._attack_ids, self._known_ids,
+                             min_precision=self.s5_min_precision)
+        out["alerts_considered"] = len(items)
+        out["normal_size"] = len(self._normal_ids)
+        return out
 
     def contain(self) -> None:
         self._set_phase("S6")
@@ -494,7 +614,9 @@ class ConfigEnvironment(Environment):
         if self.judgment == "flag":
             self._set_nonce()
         self._set_phase("S1")
-        self._attack_traffic_ids = []
+        self._attack_ids = []
+        self._normal_ids = []
+        self._known_ids = set()
 
 
 def prepare_egress(team_env, squid_conf):

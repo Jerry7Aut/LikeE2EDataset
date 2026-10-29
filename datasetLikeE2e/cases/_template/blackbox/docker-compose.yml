@@ -4,7 +4,10 @@
 #   name: <项目名>（与 case.env 的 COMPOSE_PROJECT 一致）
 #   <target> 是业务外壳 + 漏洞载体（要自己写 target/Dockerfile）
 #   ${TARGET_IMAGE:-<vul 镜像>} 让评测器能切 vul/patched
-#   各服务的 image 前缀 <项目名>/
+#   target 之外的 case 专属服务，image 前缀用 <项目名>/
+#
+# 公用组件（gateway / ndr / egress）不复制源码：构建上下文指向
+# datasetLikeE2e/components/，镜像名是仓库级共享 tag。改组件只改那一份。
 #
 # 组织约定（三道现有 case 都按这个来，评测器也只依赖这些）：
 #   * 服务名用语义裸名，**不加前缀**：target / gateway / egress / traffic / normal，
@@ -57,11 +60,11 @@ services:
       retries: 12
       start_period: 3s
 
-  # ── 唯一策略执行点（数据面）+ 蓝队受控 API（管理面），通用，复制即可 ──
+  # ── 唯一策略执行点（数据面）+ 蓝队受控 API（管理面）；公用镜像 ──
   gateway:
     build:
-      context: ./security_gateway
-    image: <项目名>/policy-gateway:1
+      context: ../../../components/security_gateway
+    image: datasetlikee2e/policy-gateway:1
     networks:
       gateway_net:
         ipv4_address: 172.31.0.3
@@ -85,11 +88,11 @@ services:
     depends_on:
       - target
 
-  # ── 旁路 NDR：蓝队的观测与处置平台（通用，复制即可）──
+  # ── 旁路 NDR：蓝队的观测与处置平台（公用镜像）──
   ndr:
     build:
-      context: ./ndr
-    image: <项目名>/ndr:1
+      context: ../../../components/ndr
+    image: datasetlikee2e/ndr:1
     networks:
       gateway_net:
         ipv4_address: 172.31.0.4
@@ -109,11 +112,11 @@ services:
     depends_on:
       - gateway
 
-  # ── 共享出口（通用，复制即可）──
+  # ── 共享出口（公用镜像）──
   egress:
     build:
-      context: ./shared_egress
-    image: <项目名>/transparent-proxy:1
+      context: ../../../components/transparent_proxy
+    image: datasetlikee2e/transparent-proxy:1
     networks:
       gateway_net:
         ipv4_address: 172.31.0.2
@@ -133,8 +136,8 @@ services:
   #    case.json 的 replay.attack_cmd / business.command 就是它的子命令
   traffic:
     build:
-      context: ./runner
-    image: <项目名>/runner:1
+      context: ../../../components/runner
+    image: datasetlikee2e/runner:1
     profiles: ["traffic"]
     networks:
       - entry_net
@@ -148,8 +151,8 @@ services:
   # ── 正常业务流量（一次性）：业务基线与 S7 口径 ──
   normal:
     build:
-      context: ./runner
-    image: <项目名>/runner:1
+      context: ../../../components/runner
+    image: datasetlikee2e/runner:1
     profiles: ["traffic"]
     networks:
       - entry_net
