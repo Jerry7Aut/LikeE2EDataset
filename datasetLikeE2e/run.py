@@ -118,6 +118,14 @@ def main():
     with open(summary_out, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     print(f"[run] 汇总已写入 {summary_out}")
+
+    # S8：双轨汇总与能力画像。只读本轮报告，不改单题分数。
+    report_paths = [os.path.join(RESULTS_DIR, f"{cid}.json") for cid, _ in cases
+                    if os.path.isfile(os.path.join(RESULTS_DIR, f"{cid}.json"))]
+    if report_paths:
+        s8 = os.path.join(DATASET_DIR, "evaluator", "s8_report.py")
+        subprocess.run([sys.executable, s8, "--inputs", *report_paths,
+                        "--out", os.path.join(RESULTS_DIR, "s8.json")], check=False)
     return 0
 
 

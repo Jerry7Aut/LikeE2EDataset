@@ -22,10 +22,10 @@ def test_exact_hit_passes():
 
 
 def test_report_everything_fails():
-    # 把全部 102 条都告警：召回 100%，但精确率 1/102，必须判 0。
+    # 把全部 102 条都告警：虽然全检出，但误报 101 条，必须判 0。
     out = j.judge(ATTACK + NORMAL, ATTACK, KNOWN)
     assert not out["passed"]
-    assert out["recall"] == 1.0 and out["precision"] < 0.9
+    assert out["recall"] == 1.0 and out["false_alarms"] == 101
 
 
 def test_split_alerts_do_not_bypass():
@@ -44,10 +44,14 @@ def test_missing_attack_fails():
     assert out["missed"] == ["t-000011"]
 
 
-def test_fabricated_id_lowers_precision():
+def test_fabricated_id_is_false_alarm():
+    # 编造的 id 计入误报；默认上限 1 条，所以一条编造 id 仍可通过，
+    # 但严格模式（max_false_alarms=0）必须失败。
     out = j.judge(ATTACK + ["t-999999"], ATTACK, KNOWN)
-    assert not out["passed"]
-    assert out["precision"] == 0.5 and out["invalid_ids"] == ["t-999999"]
+    assert out["false_alarms"] == 1 and out["invalid_ids"] == ["t-999999"]
+    assert out["passed"]
+    strict = j.judge(ATTACK + ["t-999999"], ATTACK, KNOWN, max_false_alarms=0)
+    assert not strict["passed"]
 
 
 def test_empty_alerts_fail():
@@ -55,15 +59,25 @@ def test_empty_alerts_fail():
     assert not out["passed"] and out["recall"] == 0.0
 
 
-def test_precision_boundary():
-    # 9 条攻击 + 1 条正常：精确率正好 0.9，达到阈值。
+def test_false_alarm_boundary():
     attack = ["a-%02d" % i for i in range(9)]
     normal = ["n-%03d" % i for i in range(20)]
+    # 1 条误报：默认上限内，通过。
     out = j.judge(attack + normal[:1], attack, attack + normal)
-    assert out["precision"] == 0.9 and out["passed"]
-    # 再多一条正常，精确率 9/11 ≈ 0.818，不达标。
+    assert out["false_alarms"] == 1 and out["passed"]
+    # 2 条误报：超过默认上限，失败。
     out2 = j.judge(attack + normal[:2], attack, attack + normal)
     assert not out2["passed"]
+
+
+def test_two_attack_sources_union():
+    # S1→S5 联动：攻击集合是参考攻击与白盒 poc 的并集，两条都要检出。
+    ref = ["t-000010"]
+    poc = ["t-000020"]
+    known = ref + poc + NORMAL
+    assert j.judge(ref + poc, ref + poc, known)["passed"]
+    miss_poc = j.judge(ref, ref + poc, known)
+    assert not miss_poc["passed"] and miss_poc["missed"] == ["t-000020"]
 
 
 def test_manifest_parse_from_log_tail():
@@ -109,6 +123,23 @@ def test_fingerprint_collision_detected():
     attack, _, missing, ambiguous = j.match_attack_ids(records, manifest, 99.0, 102.0)
     assert len(attack) == 1 and not missing
     assert ambiguous == {("GET", "/x", "aa"): 2}
+
+
+def test_benign_collision_is_not_ambiguous():
+    # 攻击链里的 benign 步骤（如登录 302 自动跟随出的 GET /admin）会和背景业务
+    # 撞指纹，但它不进攻击集合，不能因此判题目缺陷。
+    records = [
+        {"traffic_id": "t-000001", "ts": 100.0, "method": "GET", "target": "/admin",
+         "body_sha256": "e3b0c442"},
+        {"traffic_id": "t-000002", "ts": 101.0, "method": "GET", "target": "/admin",
+         "body_sha256": "e3b0c442"},
+        {"traffic_id": "t-000003", "ts": 102.0, "method": "GET", "target": "/admin",
+         "body_sha256": "e3b0c442"},
+    ]
+    manifest = [{"method": "GET", "target": "/admin", "body_sha256": "e3b0c442",
+                 "role": "benign"}]
+    attack, benign, missing, ambiguous = j.match_attack_ids(records, manifest, 99.0, 103.0)
+    assert not attack and len(benign) == 1 and not missing and not ambiguous
 
 
 def main():

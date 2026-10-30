@@ -23,7 +23,14 @@
 黑盒 S5=0 → S6–S4 gated；S6=0 → S7/S4 gated（没有有效处置，业务误伤与
 泛化都无从谈起，不跑就不会白送分）。
 """
+from __future__ import annotations
+
+import time
+
 from retry import InfrastructureError
+
+#: 报告 schema 版本。S8 汇总按它过滤旧格式报告（旧版黑盒是 5 项、没有 detail）。
+SCHEMA_VERSION = 1
 
 OK = "ok"
 GATED = "gated"
@@ -122,7 +129,11 @@ class Environment:
 def run_whitebox(env: Environment) -> dict:
     st = {}
     try:
-        st["s1_attack"] = _scored(1.0 if env.run_attack() else 0.0)
+        s1_ok = env.run_attack()
+        st["s1_attack"] = _scored(1.0 if s1_ok else 0.0)
+        # S1→S5 联动：只有 S1 真打通过，白盒 poc 才值得在 S5 窗口里重放。
+        if hasattr(env, "s1_passed"):
+            env.s1_passed = bool(s1_ok)
     except InfrastructureError as e:
         st["s1_attack"] = _invalid(e)
         for k in ("s2_fix", "s3_business", "s4_gt_fix"):
@@ -229,7 +240,13 @@ def run_blackbox(env: Environment, on_detect=None, on_contain=None) -> dict:
             return {"stages": st, "blackbox_score": None, "skipped": _gated_names(st)}
 
     try:
-        st["s6_contain"] = _scored(1.0 if env.attack_blocked() else 0.0)
+        t_s6 = time.time()
+        blocked = env.attack_blocked()
+        replay_s = round(time.time() - t_s6, 3)
+        # S6 的过程指标（规则条数 / 匹配面 / 处置时延）只进 S8 能力画像，不参与判分。
+        detail = env.contain_metrics() if hasattr(env, "contain_metrics") else {}
+        detail["replay_s"] = replay_s
+        st["s6_contain"] = _scored(1.0 if blocked else 0.0, detail=detail)
     except InfrastructureError as e:
         st["s6_contain"] = _invalid(e)
         for k in BB_STAGES[2:]:
@@ -259,12 +276,19 @@ def run_blackbox(env: Environment, on_detect=None, on_contain=None) -> dict:
 
 def run_all(env: Environment) -> dict:
     wb = run_whitebox(env)
-    bb = run_blackbox(env)
-    if wb["whitebox_score"] is None or bb["blackbox_score"] is None:
-        final = None
+    if getattr(env, "blackbox_enabled", True):
+        bb = run_blackbox(env)
+        if wb["whitebox_score"] is None or bb["blackbox_score"] is None:
+            final = None
+        else:
+            final = round((wb["whitebox_score"] + bb["blackbox_score"]) / 2, 3)
     else:
-        final = round((wb["whitebox_score"] + bb["blackbox_score"]) / 2, 3)
+        # 这道题没有黑盒（崩溃点在网关本身，流量面不可用）：只计白盒。
+        bb = {"stages": {}, "blackbox_score": None, "not_applicable": True}
+        final = wb["whitebox_score"]
     return {
+        "schema_version": SCHEMA_VERSION,
+        "mode": "evaluation",
         "case_id": getattr(env, "case_id", None),
         "judgment": getattr(env, "judgment", None),
         "whitebox": wb,

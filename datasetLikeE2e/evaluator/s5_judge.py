@@ -11,17 +11,24 @@
   A          本次攻击发出、且在 NDR 中匹配到的 traffic_id 集合。
   R          蓝队本轮所有告警 traffic_ids 的并集（去重）。
 
-判据：召回 = |R∩A|/|A| 必须为 100%，精确率 = |R∩A|/|R| 不低于阈值（默认 90%）。
-不存在的 id 计入 R，因此编造 id 会拉低精确率。
+判据（全检出 + 误报上限）：
+
+  * 全检出：A 里的每一条都必须出现在 R 里，漏一条就失败。攻击流量通常只有
+    1~2 条，召回率写成比例没有信息量，所以直接按集合包含判定。
+  * 误报上限：R 里不属于 A 的 id（含编造的 id）不超过 s5.max_false_alarms，
+    默认 1 条。
 
 取并集而不是逐条告警判分，是为了封死「把每条流量各包一条告警」的绕过路径。
+recall / precision 仍然计算，但只作为观测指标给 S8 能力画像用，不参与通过判定。
 """
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-DEFAULT_MIN_PRECISION = 0.9
+#: 允许的误报条数（R 中不属于 A 的 id）。攻击流量很少，按比例算等于零容忍，
+#: 按条数算既保留了"不能乱报"的约束，又不会因为多报一条就归零。
+DEFAULT_MAX_FALSE_ALARMS = 1
 
 
 def parse_manifest(stdout: str) -> List[Dict[str, Any]]:
@@ -67,14 +74,21 @@ def match_attack_ids(records: Iterable[Dict[str, Any]],
     只在攻击执行的时间区间内匹配，避免把背景业务里恰好同指纹的请求误认成攻击。
     返回 (attack_ids, benign_ids, missing, ambiguous)：
 
-      * missing：脚本声明了但 NDR 里没找到的请求；
-      * ambiguous：某条攻击指纹在窗口内的记录数多于清单里的条数，说明背景流量
+      * missing：清单里的**攻击**步骤在 NDR 里没找到（benign 步骤缺失不算）；
+      * ambiguous：某条**攻击**指纹在窗口内的记录数多于清单里的条数，说明背景流量
         里有同指纹请求，标注会张冠李戴。按题目缺陷处理，不能静默取第一条。
+
+    benign 清单项只用于说明「这一步是链上的正常动作」，不进检出集合；它和背景
+    业务撞指纹是常态（例如登录后的 302 会被客户端自动跟随成 GET），不构成歧义。
     """
     manifest = list(manifest)
     need: Dict[Tuple[str, str, str], int] = {}
+    attack_keys = set()
     for m in manifest:
-        need[_key(m)] = need.get(_key(m), 0) + 1
+        k = _key(m)
+        need[k] = need.get(k, 0) + 1
+        if str(m.get("role") or "attack").lower() != "benign":
+            attack_keys.add(k)
 
     buckets: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
     for r in records:
@@ -84,38 +98,42 @@ def match_attack_ids(records: Iterable[Dict[str, Any]],
         buckets.setdefault(_key(r), []).append(r)
 
     ambiguous = {k: len(v) for k, v in buckets.items()
-                 if k in need and len(v) > need[k]}
+                 if k in attack_keys and len(v) > need[k]}
 
     attack: List[str] = []
     benign: List[str] = []
     missing: List[Dict[str, Any]] = []
     for m in manifest:
+        role = str(m.get("role") or "attack").lower()
         bucket = buckets.get(_key(m))
         if not bucket:
-            missing.append(m)
+            # benign 是链上的正常动作，没抓到不影响攻击集合；只有链上的利用步骤
+            # 缺失才说明镜像或清单对不上。
+            if role != "benign":
+                missing.append(m)
             continue
         rec = bucket.pop(0)
-        role = str(m.get("role") or "attack").lower()
         (benign if role == "benign" else attack).append(str(rec["traffic_id"]))
     return attack, benign, missing, ambiguous
 
 
 def judge(alert_ids: Iterable[str], attack_ids: Iterable[str],
           known_ids: Iterable[str],
-          min_precision: float = DEFAULT_MIN_PRECISION) -> Dict[str, Any]:
-    """按集合口径判定 S5。alert_ids 是蓝队所有告警 traffic_ids 的原样拼接。"""
+          max_false_alarms: int = DEFAULT_MAX_FALSE_ALARMS) -> Dict[str, Any]:
+    """按「全检出 + 误报上限」判定 S5。alert_ids 是蓝队所有告警 traffic_ids 的原样拼接。"""
     attack = {str(x) for x in attack_ids}
     known = {str(x) for x in known_ids}
     referenced = {str(x) for x in alert_ids}
 
     hits = referenced & attack
     missed = sorted(attack - referenced)
-    extra = sorted(referenced - attack)
+    extra = sorted(referenced - attack)      # 不属于攻击的引用，含编造的 id
     invalid = sorted(referenced - known)
+    false_alarms = len(extra)
 
     recall = (len(hits) / len(attack)) if attack else 0.0
     precision = (len(hits) / len(referenced)) if referenced else 0.0
-    passed = bool(attack) and recall >= 1.0 and precision >= min_precision
+    passed = bool(attack) and not missed and false_alarms <= int(max_false_alarms)
 
     return {
         "passed": passed,
@@ -124,7 +142,9 @@ def judge(alert_ids: Iterable[str], attack_ids: Iterable[str],
         "attack_size": len(attack),
         "referenced": len(referenced),
         "hits": len(hits),
-        "false_positive": len(referenced) - len(hits),
+        "false_alarms": false_alarms,
+        "max_false_alarms": int(max_false_alarms),
+        "false_positive": false_alarms,
         "missed": missed[:20],
         "extra": extra[:20],
         "invalid_ids": invalid[:20],

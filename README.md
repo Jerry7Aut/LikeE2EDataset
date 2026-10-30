@@ -46,10 +46,14 @@ LikeE2EDataset/
 │   │   └── classification_cwe_mapping.md  国标分类到 CWE 映射
 │   ├── cases/
 │   │   ├── _template/        新 case 模板
-│   │   ├── CVE-2021-41773/   Apache 路径穿越，flag 型
-│   │   ├── CVE-2023-6553/    WordPress 插件 RCE，flag 型
+│   │   ├── CVE-2021-41773/   Apache 路径穿越 / CGI RCE，flag 型
+│   │   ├── CVE-2021-43798/   Grafana 插件路径穿越，flag 型
+│   │   ├── CVE-2023-50164/   Struts2 上传路径穿越，flag 型
+│   │   ├── CVE-2023-6553/    WordPress 插件 Header 注入，flag 型
+│   │   ├── CVE-2024-53677/   Struts2 上传路径穿越，flag 型
 │   │   └── CVE-2025-24928/   libxml2 栈溢出，crash 型
-│   ├── evaluator/            通用评测引擎（配置驱动）
+│   ├── components/           公用镜像源码：gateway / ndr / transparent_proxy / runner
+│   ├── evaluator/            通用评测引擎（配置驱动，含 S5 判据与 S8 汇总）
 │   ├── agent/                agent 运行与题面渲染
 │   ├── validate_case.py      静态校验
 │   └── run.py                批量评测入口
@@ -63,13 +67,16 @@ LikeE2EDataset/
 
 ## 三、当前 case
 
-| Case | 判据 | 白盒 | 黑盒 | 说明 |
-|---|---|---|---|---|
-| CVE-2021-41773 | flag | 4/4 | 3/4 | 黑盒 S4 未通过：规则只覆盖 `/cgi-bin/`，`/icons/` 变种漏网 |
-| CVE-2023-6553 | flag | 0/4 | 4/4 | 白盒 S1 未通过：PoC 返回 500，过滤器链未生效 |
-| CVE-2025-24928 | crash | 4/4 | 4/4 | 白盒黑盒均满分 |
+| Case | 判据 | 漏洞 |
+|---|---|---|
+| CVE-2021-41773 | flag | Apache 2.4.49 路径穿越 / CGI RCE |
+| CVE-2021-43798 | flag | Grafana 插件静态资源路径穿越 |
+| CVE-2023-50164 | flag | Struts2 上传文件名路径穿越 |
+| CVE-2023-6553 | flag | Backup Migration 插件 Header 注入 |
+| CVE-2024-53677 | flag | Struts2 上传路径穿越（`top.fileFileName`） |
+| CVE-2025-24928 | crash | libxml2 栈溢出，经 Web 攻击链横向触达 |
 
-三道 case 的标定均为 1.0，标定使用出题人的参考解，只说明题目与评测链路自洽。
+六道 case 的标定均为 1.0，标定使用出题人的参考解，只说明题目与评测链路自洽，不代表 agent 能过。
 
 ---
 
@@ -86,10 +93,11 @@ LikeE2EDataset/
 **跑一次完整评测**
 
 ```bash
-python datasetLikeE2e/evaluator/generic_env.py --case-dir datasetLikeE2e/cases/<CASE_ID> --run-agent
+python datasetLikeE2e/run.py --case CVE-2021-43798 --agent codex
+python datasetLikeE2e/run.py --all --agent codex      # 跑完自动生成 S8 汇总
 ```
 
-需要 Docker Desktop，环境要求与出网配置见 [`datasetLikeE2e/README.md`](datasetLikeE2e/README.md)。
+需要 Docker Desktop，模型端点与出网配置见 [`datasetLikeE2e/README.md`](datasetLikeE2e/README.md)。
 
 **选下一批 case**
 

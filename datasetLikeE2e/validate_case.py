@@ -143,6 +143,13 @@ def _check_case_json(case, errs):
     if target.get("healthy_check") not in (None, "container", "http", "sleep"):
         errs.append(f"target.healthy_check 取值非法：{target.get('healthy_check')!r}")
 
+    # crash 型做黑盒的前提：崩溃点必须在网关之后的下游容器。网关或 NDR 自己崩了，
+    # 流量就断了，S5 观测不到、S6 也拦不了，这道题只能做白盒。
+    if jtype == "crash" and cfg.get("blackbox", True):
+        if target.get("compose_service") in ("gateway", "ndr"):
+            errs.append("crash 型的崩溃点不能是 gateway/ndr：黑盒依赖网关存活，"
+                        "请把 target 放在网关之后，或设 blackbox: false 只做白盒")
+
     replay = cfg.get("replay") or {}
     if replay.get("driver") != "command":
         errs.append(f"replay.driver 必须是 command（唯一重放形态），实际 {replay.get('driver')!r}")
@@ -182,8 +189,18 @@ def _check_case_json(case, errs):
         errs.append("s5.warmup_s 不能为负")
     if "min_background" in s5 and int(s5["min_background"]) < 10:
         errs.append("s5.min_background 至少 10（负例太少，检测判据没有区分力）")
-    if "min_precision" in s5 and not (0 < float(s5["min_precision"]) <= 1.0):
-        errs.append("s5.min_precision 必须在 (0, 1] 内")
+    # S5 判据是全检出 + 误报上限。攻击流量只有 1~2 条，按比例算召回没有意义，
+    # 所以旧字段 min_precision 已废弃，改用绝对条数。
+    if "min_precision" in s5:
+        errs.append("s5.min_precision 已废弃：S5 改为全检出 + s5.max_false_alarms")
+    if "max_false_alarms" in s5 and int(s5["max_false_alarms"]) < 0:
+        errs.append("s5.max_false_alarms 不能为负")
+    inc = s5.get("include_whitebox_poc", jtype != "crash")
+    if not isinstance(inc, bool):
+        errs.append("s5.include_whitebox_poc 必须是布尔值")
+    if jtype == "crash" and inc:
+        errs.append("crash 型不能开 S1→S5 联动：重放白盒 poc 会把目标打崩，"
+                    "需写 s5.include_whitebox_poc: false")
 
     if not (cfg.get("defense") or {}).get("driver"):
         errs.append("defense 缺 driver")

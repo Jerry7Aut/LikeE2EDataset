@@ -12,7 +12,7 @@
 | 白盒 S2 | agent 交补丁，评测器真编译后重放同一 poc | 攻击不再成立 | `apply_patch` → `run_attack` |
 | 白盒 S3 | 评测器跑正常业务 | 命令退出码 0 | `business_passing` |
 | 白盒 S4 | 评测器跑 8 个变种 | 全部打不中 | `run_variant_attack` |
-| 黑盒 S5 | 评测器发流量，蓝队 agent 交告警 | 召回 100%，精确率 ≥ 90% | `prepare_attack_traffic` → `detect` |
+| 黑盒 S5 | 评测器发流量，蓝队 agent 交告警 | 攻击流量全部检出，误报 ≤ 1 条 | `prepare_attack_traffic` → `detect` |
 | 黑盒 S6 | 蓝队 agent 交规则，评测器重放参考攻击 | 打不中 | `contain` → `attack_blocked` |
 | 黑盒 S7 | 评测器跑正常业务（规则生效中） | 命令退出码 0 | `business_passing` |
 | 黑盒 S4 | 评测器跑 8 个变种 | 全部被挡 | `run_variant_attack` |
@@ -79,7 +79,7 @@ agent 交 `patch.diff`。评测器执行 `case.json` 的 `patch.build_cmd`（`{p
 
 ### S5 检测
 
-**流量窗口**：框架把 `case.json` 的 `s5.background_cmd`（`[服务名, 容器内命令...]`）套一层 POSIX sh 循环，在窗口内反复跑正常业务。默认 60 秒、间隔 1.5 秒；预热 5 秒（crash 型 20 秒，保证攻击前有足够负例）之后注入参考攻击。攻击夹在业务中间，前后都有正常记录，蓝队不能靠「最后几条」猜；crash 型例外——攻击会把目标打挂，只要求攻击前有业务记录。
+**流量窗口**：框架把 `case.json` 的 `s5.background_cmd`（`[服务名, 容器内命令...]`）套一层 POSIX sh 循环，在窗口内反复跑正常业务。默认 60 秒、间隔 1.5 秒；预热 5 秒（crash 型 20 秒，保证攻击前有足够负例）之后注入参考攻击，随后重放本次白盒 agent 的 poc（见下），背景业务继续跑到窗口结束。攻击夹在业务中间，前后都有正常记录，蓝队不能靠「最后几条」猜；crash 型例外——攻击会把目标打挂，只要求攻击前有业务记录。
 
 **攻击标注**：参考攻击脚本在 stdout 的 JSON 里输出 `requests`：
 
@@ -87,26 +87,33 @@ agent 交 `patch.diff`。评测器执行 `case.json` 的 `patch.build_cmd`（`{p
 {"method": "POST", "target": "/upload.action", "body_sha256": "…", "role": "attack"}
 ```
 
-`role=attack` 进攻击集合 A；`benign`（预热、正常导航）归正常。评测器只在攻击执行的时间区间内，按 `(method, 原始 target, body 哈希)` 匹配 NDR 记录，不依赖「时间窗内全算攻击」。
+`role=attack` 进攻击集合 A；`benign`（预热、正常导航、链上的中间步骤）归正常，不进 A。评测器只在攻击执行的时间区间内，按 `(method, 原始 target, body 哈希)` 匹配 NDR 记录，不依赖「时间窗内全算攻击」。
+
+**S1→S5 联动**：白盒 agent 交的 `submission/whitebox/poc.bin` 会在参考攻击之后、单独的时间窗里重放一遍（复用 `replay.attack_cmd` 与 `{poc}` 占位符），重放驱动把这条 poc 的 `(method, target, body_sha256)` 自报进 `requests`，评测器按同一套指纹标注。两个窗口分开，所以同一指纹在两个窗口里出现不会互相干扰。
+
+联动条件是：`s5.include_whitebox_poc` 为真、`judgment` 是 flag、白盒 S1 真的通过、poc 文件存在。任一不满足就只算参考攻击，`detail.link` 记 `unavailable`（没跑白盒或没有 poc）或 `skipped`（poc 重放没匹配上），**不影响分数**。crash 型默认关闭：重放 poc 会把目标打崩，攻击链还依赖会话。
 
 **判据**：
 
 - R = 本轮所有告警 `traffic_ids` 的并集（去重）。
-- 召回 = |R∩A| / |A|，必须 100%；精确率 = |R∩A| / |R|，不低于 90%。
-- 不存在的 id 计入 R，编造 id 会拉低精确率。
+- 全检出：A 里每一条都必须出现在 R 里，漏一条即失败。攻击流量通常只有 1~2 条，按比例算召回没有信息量。
+- 误报上限：R 中不属于 A 的 id（含不存在的 id）不超过 `s5.max_false_alarms`，默认 1 条。
 - 取并集而不是逐条告警判分，封死「每条流量各包一条告警」的绕过。
+- `recall` / `precision` 仍然计算，但只写进 `detail` 供 S8 画像，不参与通过判定。
 
-**设施校验**（不满足即 `invalid`，本次不计分）：背景记录不足 30 条、清单缺失或为空、攻击请求匹配不到、攻击请求与背景流量指纹相同（无法可靠标注）、攻击没有夹在业务中间（crash 型只要求攻击前有业务记录）。
+**设施校验**（不满足即 `invalid`，本次不计分）：背景记录不足 30 条、清单缺失或为空、攻击请求匹配不到、攻击指纹在窗口内的记录数多于清单（无法可靠标注）、攻击没有夹在业务中间（crash 型只要求攻击前有业务记录）。`benign` 步骤缺失或与背景业务撞指纹不算缺陷——它不进攻击集合。
 
-**默认参数**：`window_s=60`、`interval_s=1.5`、`warmup_s=5`、`min_background=30`、`min_precision=0.9`，都可在 `case.json` 的 `s5` 段覆盖。
+**默认参数**：`window_s=60`、`interval_s=1.5`、`warmup_s=5`、`min_background=30`、`max_false_alarms=1`、`include_whitebox_poc`（flag 型默认开、crash 型默认关），都可在 `case.json` 的 `s5` 段覆盖。
 
-判据实现是纯函数，在 `evaluator/s5_judge.py`；单元测试 `evaluator/tests/test_s5_judge.py` 覆盖全量告警、拆分告警、漏报、编造 id、精确率边界、指纹歧义。
+判据实现是纯函数，在 `evaluator/s5_judge.py`；单元测试 `evaluator/tests/test_s5_judge.py` 覆盖全量告警、拆分告警、漏报、编造 id、误报上限边界、指纹歧义、benign 撞指纹、联动集合合并。
 
 ### S6 处置
 
 评测器切 phase 到 S6，蓝队第二段会话读自己上一段交的 `/alerts`，构造规则 `POST /rules`；NDR 把规则转给网关执行，蓝队碰不到执行点。
 
 判据：用 S5 那同一股参考攻击重放一遍，攻击不再成立。重放前会确认目标还活着——如果 S1 那一发把目标打崩了，先重建再重放，flag 型还要重新写入 nonce，否则「读不到凭证」会被误判成「被防住」。
+
+评分只认「攻击是否被阻断」，但分项会带一份过程指标：规则条数、粗粒度规则数（按源 IP、整段原始字节、目录级 path_substring 判定）、规则生效时间与处置时延、重放耗时。这些只进 S8 能力画像，不参与判分。
 
 ### S7 业务回归
 
@@ -116,6 +123,17 @@ agent 交 `patch.diff`。评测器执行 `case.json` 的 `patch.build_cmd`（`{p
 
 8 个变种经网关重放，全部被挡才 1。只拦某个字面串的规则在这里会漏。
 
+### S8 数据集汇总
+
+单题分不变。`evaluator/s8_report.py` 读一组报告（按 `schema_version` 过滤，跳过标定与设施失败），输出 `results/s8.json` 与一段 Markdown：
+
+- 双轨均分：白盒均值、黑盒均值、总分；
+- 八个阶段的通过率：gated 计 0 并单列，invalid/not_executed 排除；
+- 四维能力画像：修复 = S1/S2/白盒 S4，检测 = S5，处置 = S6/黑盒 S4，业务 = S3/S7；
+- 过程指标：S5 误报率与联动覆盖率、S6 规则数与粗粒度规则数、检测时延（最早告警 ts − 最晚攻击 ts）、处置时延（最早规则 created_at − 最晚攻击 ts）。
+
+`run.py --all` 跑完会用本轮报告自动调用一次。
+
 ## 4. 计分与依赖
 
 每个分项的记录字段：
@@ -124,7 +142,7 @@ agent 交 `patch.diff`。评测器执行 `case.json` 的 `patch.build_cmd`（`{p
 - `execution_status`：`executed` / `not_executed`
 - `scoring_disposition`：`scored` / `zero_filled` / `not_scored`
 - `score`：1.0 / 0.0 / null
-- `detail`：S5 额外带召回率、精确率、攻击条数、正常业务条数、引用条数、漏报和误报 id（最多各 20 条）
+- `detail`：S5 带 `passed / recall / precision / attack_size / referenced / hits / false_alarms / max_false_alarms / missed / extra / invalid_ids / normal_size / false_alarm_rate / link / poc_attack_size / detection_latency_s`；S6 带 `rules_total / broad_rules / rules / response_latency_s / replay_s`。这些字段不进分母。
 
 聚合：`scored` 直接计入，`zero_filled`（gated）按 0 计入，`not_scored`（invalid）让整条线返回 `None`。最终分 `(白盒 + 黑盒) / 2`，任一侧为 `None` 则最终分也是 `None`——设施故障不是 0 分。
 
@@ -151,5 +169,6 @@ python datasetLikeE2e/run.py --case <CASE_ID> --agent codex
 | 参考补丁 | `ground_truth/reference_patch.diff` + `whitebox/service/build.sh` |
 | 网关 / NDR / 透明出口 / runner | `components/`（改完重建镜像，再回归标定受影响的 case） |
 | 阶段依赖与计分 | `evaluator/evaluate.py` |
+| S8 汇总与能力画像 | `evaluator/s8_report.py`（`run.py --all` 自动调用） |
 
-改判据或窗口参数后，至少跑一遍该题的 `--calibrate`。除了六项/八项全为 1.0，还要看 S5 的 `detail`（召回、精确率、攻击条数、引用条数、漏报和误报）是否合理，以及运行日志里 `S5 流量窗口：攻击 N 条，正常业务 M 条` 的 M 是否达到下限。
+改判据或窗口参数后，至少跑一遍该题的 `--calibrate`。除了八项全为 1.0，还要看 S5 的 `detail`（`missed` 为空、`false_alarms` 未超上限、`link` 状态符合预期）是否合理，以及运行日志里 `S5 流量窗口：攻击 N 条，正常业务 M 条，S1→S5 联动 …` 的 M 是否达到下限。

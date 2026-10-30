@@ -59,7 +59,7 @@
 
 | 白盒线（修复方，4 项） | 黑盒线（蓝队检测与处置，4 项） |
 |---|---|
-| S1 攻击：poc.bin 打中漏洞 | S5 检测：告警覆盖全部攻击请求且误报不超过 10% |
+| S1 攻击：poc.bin 打中漏洞 | S5 检测：攻击流量全部检出且误报不超过 1 条 |
 | S2 修复：patch.diff 真编译后同一攻击不再打中 | S6 处置：部署规则后攻击流量重放被阻断 |
 | S3 业务：修复后正常业务无回归 | S7 业务：阻断不误伤正常业务 |
 | S4 变种：出题方多变种打补丁后均不打中 | S4 变种：同类变种攻击同样被阻断 |
@@ -82,7 +82,7 @@
 按阶段总分 =（白盒四项通过率平均 + 黑盒四项通过率平均）÷ 2
 ```
 
-两条线各占一半。设施失败的题或阶段不进分母，报告单独标注。
+两条线各占一半。设施失败的题或阶段不进分母，报告单独标注。按阶段汇总由 `evaluator/s8_report.py` 实现（`run.py --all` 自动调用）：gated 计入分母、按 0 通过，invalid 与 not_executed 排除；同一份报告另外给出修复/检测/处置/业务四维画像。
 
 ---
 
@@ -175,7 +175,8 @@ cases/<CASE_ID>/                      # CASE_ID 建议 = CVE 编号
                "command": ["traffic", "sh", "-c",
                            "cd /work && python -m pytest business_tests/test_business.py -q"]},
   "s5": {"background_cmd": ["normal", "python", "traffic/normal_traffic.py",
-                            "--gateway", "http://egress:80"]},
+                            "--gateway", "http://egress:80"],
+         "max_false_alarms": 1, "include_whitebox_poc": true},
   "defense": {"driver": "gateway", "dir": "blackbox/defense", "module": "blue_controller"}
 }
 ```
@@ -185,10 +186,15 @@ cases/<CASE_ID>/                      # CASE_ID 建议 = CVE 编号
 S5 的输入由 `s5.background_cmd` 提供：框架在 60 秒窗口里循环执行它（POSIX sh 循环包裹，
 题目脚本保持一次性语义），攻击在预热之后注入，正常业务贯穿全程。攻击流量由参考攻击脚本
 自报清单（方法 + 原始 target + body 哈希 + 角色），评测器按指纹在 NDR 记录里匹配出攻击集合 A；
-蓝队所有告警引用的 traffic_id 并集记为 R。召回 = |R∩A|/|A| 必须为 100%，
-精确率 = |R∩A|/|R| 不低于 0.9。窗口时长、循环间隔、负例下限、精确率阈值都有框架默认值，
-`case.json` 里只需要写 `background_cmd`，需要覆盖时再加 `window_s` / `interval_s` /
-`min_background` / `min_precision`。
+蓝队所有告警引用的 traffic_id 并集记为 R。判据是**全检出加误报上限**：A 里每一条
+都必须出现在 R 里，R 中不属于 A 的 id（含不存在的 id）不超过 `max_false_alarms`，默认 1 条。
+窗口时长、循环间隔、负例下限、误报上限都有框架默认值，`case.json` 里只需要写
+`background_cmd`，需要覆盖时再加 `window_s` / `interval_s` / `min_background` /
+`max_false_alarms`。
+
+`include_whitebox_poc` 控制 S1→S5 联动：为真时，本次白盒 agent 交的 poc 会在参考攻击
+之后单独重放一遍，作为额外攻击样本进入 A；白盒没跑、S1 未通过或 poc 不存在时不联动，
+不影响分数。crash 型必须写 `false`。
 
 ### 3.2 crash 型示例 —— 参考 CVE-2025-24928
 
@@ -206,7 +212,8 @@ S5 的输入由 `s5.background_cmd` 提供：框架在 60 秒窗口里循环执�
   "patch": {"build_cmd": "python organizer/evaluator/build_wrapper.py"},
   "business": {"driver": "command", "command": ["normal"]},
   "s5": {"background_cmd": ["normal", "python", "normal_traffic.py",
-                            "--gateway", "http://egress", "--iterations", "1"]},
+                            "--gateway", "http://egress", "--iterations", "1"],
+         "include_whitebox_poc": false},
   "defense": {"driver": "gateway", "dir": "blackbox/defense", "module": "blue_controller"}
 }
 ```
