@@ -79,12 +79,13 @@ def main() -> int:
 
     print("\n下一步：")
     print("  1. 可行性判断：源码可得、可编译、HTTP 可达、判据稳定")
-    print("  2. 设计业务场景与正常业务流量")
+    print("  2. 设计业务场景、正常业务流量与至少五步的攻击链（至少 3 条 attack）")
     print("  3. 写 target、参考攻击、变种、参考防御、业务回归")
     print("  4. 写 whitebox 源码与真编译脚本")
-    print("  5. 写 case.json / agent_task.json / case.env")
-    print(f"  6. python datasetLikeE2e/validate_case.py {dest}")
-    print(f"  7. python datasetLikeE2e/evaluator/generic_env.py --case-dir {dest} --calibrate")
+    print("  5. 写 case.json / agent_task.json / case.env；case.json 的 s5 段至少要有 background_cmd")
+    print("  6. reference_poc / replay_poc 都要输出 requests 清单（S5 标注与 S1→S5 联动用）")
+    print(f"  7. python datasetLikeE2e/validate_case.py {dest}")
+    print(f"  8. python datasetLikeE2e/evaluator/generic_env.py --case-dir {dest} --calibrate")
     return 0
 
 
