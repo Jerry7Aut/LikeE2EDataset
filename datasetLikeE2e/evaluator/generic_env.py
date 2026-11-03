@@ -200,7 +200,10 @@ class ConfigEnvironment(Environment):
         r = subprocess.run(["docker", "compose", "-f", self.compose_file] + args,
                            cwd=self.case_dir, capture_output=True, encoding="utf-8",
                            errors="replace", timeout=timeout, env=env)
-        _raise_on_daemon_error(r, args)
+        # 只有命令真的失败时才把 daemon 报错当设施故障：构建/拉取过程中偶发的
+        # 瞬时错误会留在输出里，但 compose 最终成功，这种情况不能判成环境坏了。
+        if r.returncode != 0:
+            _raise_on_daemon_error(r, args)
         return r
 
     def dc_bg(self, args, image=None):
@@ -365,6 +368,17 @@ class ConfigEnvironment(Environment):
         r = self.dc(["ps", "--status", "running", "--services"], timeout=60)
         return self.compose_service in (r.stdout or "").split()
 
+    def _wait_target_exit(self, timeout: float = 12.0, interval: float = 0.4) -> bool:
+        """等目标容器退出（crash 判据用）。超时仍活着就返回 False。"""
+        if not self.compose_service:
+            return False
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not self._target_alive():
+                return True
+            time.sleep(interval)
+        return not self._target_alive()
+
     def _ensure_target_alive(self):
         """重放前确保目标活着——每次重放必须是一次独立、可解释的实验。
 
@@ -406,8 +420,9 @@ class ConfigEnvironment(Environment):
         _ok_rc, out = self._run_script(cmd, None if (reference or variant) else poc)
 
         if self.judgment == "crash":
-            after = self._target_alive()
-            return bool(before and not after)
+            # 崩溃不是瞬时的：ASAN 要先打印报告再退出，重放命令返回时容器可能
+            # 还在 running。给一个有限的等待窗口，否则会把「已经崩了」判成没崩。
+            return bool(before and self._wait_target_exit())
 
         try:
             resp = json.loads(out)
