@@ -25,7 +25,26 @@ def model_hosts(team_env_path):
     return [host] if host else []
 
 
-def render(hosts):
+def parent_proxy(team_env_path):
+    """可选的上级代理（team.env 的 EGRESS_PARENT_PROXY）。
+
+    内网机器没有直连外网时，squid 自己不解析域名、不直连，全部交给上级代理：
+    既保留「只放行模型 host」的白名单，又不需要机器本身能出网。
+    支持 ``host:port`` 或 ``http://host:port``。
+    """
+    data = envfile.parse(team_env_path) if team_env_path else {}
+    raw = (data.get("EGRESS_PARENT_PROXY") or "").strip()
+    if not raw:
+        return None
+    if "://" in raw:
+        raw = raw.split("://", 1)[1]
+    host, _, port = raw.partition(":")
+    if not host:
+        return None
+    return host, int(port or "3128")
+
+
+def render(hosts, parent=None):
     if hosts:
         acl_lines = "\n".join(f"acl model_host dstdomain {h}" for h in hosts)
         allow_lines = ("http_access allow CONNECT model_host\n"
@@ -33,6 +52,10 @@ def render(hosts):
     else:
         acl_lines = "# （未声明模型端点：默认全拒，agent 无法出网）"
         allow_lines = ""
+    peer_lines = ""
+    if parent:
+        peer_lines = (f"cache_peer {parent[0]} parent {parent[1]} 0 no-query default\n"
+                      "never_direct allow all\n")
     return f"""# squid.conf —— egress 代理白名单（自动生成，勿手改）
 # agent 只能访问模型端点（MODEL_BASE_URL 的 host），其余一律 deny，禁止联网搜索。
 # 重新生成：python gen_squid.py --team-env ../../team.env --out squid.conf
@@ -46,7 +69,7 @@ http_access deny !Safe_ports
 http_access deny CONNECT !SSL_ports
 {allow_lines or "http_access deny all"}
 http_access deny all
-
+{peer_lines}
 http_port 3128
 dns_v4_first on
 cache deny all
@@ -59,7 +82,7 @@ def gen(team_env_path, out_path):
     hosts = model_hosts(team_env_path)
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(render(hosts))
+        f.write(render(hosts, parent_proxy(team_env_path)))
     return hosts
 
 

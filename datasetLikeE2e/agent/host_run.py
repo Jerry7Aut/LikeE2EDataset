@@ -113,7 +113,7 @@ def run_agent(case_dir, mode, role, agent=None, custom_entrypoint=None,
     import uuid
     tag = f"{mode}-{role}" + (f"-{phase}" if phase else "")
     container = f"agent-{tag}-{uuid.uuid4().hex[:8]}"
-    cmd = ["docker", "run", "--name", container,
+    cmd = ["docker", "create", "--name", container,
            "-v", f"{ep}:/challenge/agent/entrypoint.sh:ro",
            "-v", f"{task_path}:/challenge/task.json:ro"]
     # prompt.py 也从宿主机挂载（覆盖镜像内副本）：改提示词无需重建 agent 镜像
@@ -143,8 +143,10 @@ def run_agent(case_dir, mode, role, agent=None, custom_entrypoint=None,
         for k in ("NO_PROXY", "no_proxy"):
             cmd += ["-e", f"{k}={no_proxy}"]
 
-    for n in networks:
-        cmd += ["--network", n]
+    # 老版本 Docker（20.10 等）不允许 docker run 同时带多个 --network，
+    # 但允许先 create 再逐条 network connect。新版本两种写法都支持。
+    if networks:
+        cmd += ["--network", networks[0]]
 
     cmd += [image,
             "--mode", mode, "--role", role,
@@ -152,6 +154,12 @@ def run_agent(case_dir, mode, role, agent=None, custom_entrypoint=None,
             "--timeout", str(timeout)]
 
     r = _run(cmd)
+    if r.returncode == 0:
+        for n in networks[1:]:
+            c = _run(["docker", "network", "connect", n, container])
+            if c.returncode != 0:
+                print(f"[host_run] 连接网络 {n} 失败，agent 可能访问不到目标")
+        r = _run(["docker", "start", "-a", container])
 
     # 5. 把容器内产出 copy 回宿主 submission/（容器无共享挂载，产物留在容器层）
     os.makedirs(submission_dir, exist_ok=True)
