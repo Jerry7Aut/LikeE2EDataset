@@ -171,13 +171,16 @@ class ConfigEnvironment(Environment):
         self._attack_last_ts = None  # 最后一条攻击记录的时间，用于算检测/处置时延
         self._link_status = "unavailable"   # S1→S5 联动：linked / skipped / unavailable
         self._poc_attack_ids = []
+        self._bg_container = None    # S5 背景业务容器名（到点要能强杀）
         self.s1_passed = None        # 白盒 S1 是否通过，由 run_whitebox 回填
         self._defender_mode = "reference"
         self._track = "whitebox"
         self.calibrate = False   # --calibrate 时置 True：S1/S2 改用参考 PoC 自检
 
         prepare_egress(self.team_env, self.squid_conf)
-        self.dc(["down", "-v"], timeout=120)
+        # 带 agent profile 一起拆：compose v5 的 down 不加 profile 不会清理 profile 服务，
+        # 残留的 egress_proxy 会占住 *_agent_net，把默认地址池耗光。
+        self.dc(["--profile", "agent", "down", "-v"], timeout=120)
         up = (["--profile", "agent"] if with_egress else []) + ["up", "-d", "--build"]
         rr = self.dc(up, image=self.image, timeout=3600)
         if rr.returncode != 0:
@@ -235,11 +238,17 @@ class ConfigEnvironment(Environment):
         service, rest = cmd[0], cmd[1:]
         inner = " ".join(shlex.quote(x) for x in rest)
         rounds = max(1, int(round(self.s5_window_s / max(self.s5_interval_s, 0.1))))
+        # 墙钟兜底：单轮业务脚本卡住时，循环到点也要退出，不能把整个窗口拖死
+        hard_stop = int(self.s5_window_s + 60)
         loop = (
-            f"i=0; while [ $i -lt {rounds} ]; do sh -c {shlex.quote(inner)}; "
+            f"start=$(date +%s); i=0; while [ $i -lt {rounds} ]; do "
+            f"now=$(date +%s); [ $((now-start)) -ge {hard_stop} ] && break; "
+            f"sh -c {shlex.quote(inner)}; "
             f"i=$((i+1)); sleep {self.s5_interval_s}; done"
         )
-        return ["run", "--rm", service, "sh", "-c", loop]
+        self._bg_container = f"s5bg-{self.case_id.lower()}-{int(time.time())}"
+        return ["run", "--rm", "--name", self._bg_container,
+                service, "sh", "-c", loop]
 
     def dsh(self, container, cmd, timeout=120):
         return subprocess.run(["docker", "exec", container, "sh", "-c", cmd],
@@ -524,12 +533,16 @@ class ConfigEnvironment(Environment):
                 print("[generic_env] 白盒 poc 重放没有输出 requests 清单，S1→S5 联动跳过")
 
         try:
-            bg_rc = bg.wait(timeout=self.s5_window_s + 180)
+            bg_rc = bg.wait(timeout=self.s5_window_s + 120)
         except subprocess.TimeoutExpired:
+            # 背景业务到点没退出：终止容器继续。窗口内已产生的流量照样参与判分，
+            # 负例够不够由下面的 min_background 与夹心校验决定，这里不判设施错误。
             bg.kill()
-            raise InfrastructureError(
-                f"背景业务流量未在 {self.s5_window_s + 180:.0f}s 内结束（设施问题）")
-        if bg_rc != 0:
+            subprocess.run(["docker", "rm", "-f", self._bg_container],
+                           capture_output=True)
+            print("[generic_env] 背景业务到点未退出，已终止（以 NDR 记录数为准）")
+            bg_rc = None
+        if bg_rc not in (None, 0):
             # crash 型 case 的攻击会把目标打挂，之后的业务请求本来就到不了；
             # 背景是否够用由下面的 NDR 记录数判定，不看退出码。
             print(f"[generic_env] 背景业务循环退出码 {bg_rc}（以 NDR 记录数为准）")

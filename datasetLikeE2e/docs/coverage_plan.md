@@ -298,10 +298,10 @@
 |---|---|---|---|---|
 | 1 | CVE-2024-53677 ✅ | Apache Struts2 | 文件上传 RCE | flag |
 | 2 | CVE-2023-50164 ✅ | Apache Struts2 | 路径穿越与文件上传 | flag |
-| 3 | CVE-2022-22963 | Spring Cloud Function | SpEL 注入 RCE | flag |
+| 3 | CVE-2022-22963 ✅ | Spring Cloud Function | SpEL 注入 RCE | flag |
 | 4 | CVE-2021-21234 | Spring Boot Actuator 日志查看 | 路径穿越 | flag |
 | 5 | CVE-2022-42889 | Apache Commons Text | 表达式注入 RCE | flag |
-| 6 | CVE-2022-25845 | fastjson | 反序列化 RCE | flag |
+| 6 | CVE-2022-25845 ✅ | fastjson | 反序列化 RCE | flag |
 | 7 | CVE-2022-1471 | SnakeYAML | 反序列化 RCE | flag |
 | 8 | CVE-2020-17519 | Apache Flink | 路径穿越 | flag |
 | 9 | CVE-2021-36749 | Apache Druid | 路径穿越 | flag |
@@ -320,3 +320,42 @@
 组 11 的 crash 项需要 ASAN 构建并设置溢出即 abort，否则部分漏洞在普通构建下不一定退出进程。flag 项可直接经网关触发，或按 24928 的方式包装成 HTTP 服务。
 
 **已完成补充**：CVE-2021-43798 Grafana 8.2.0，插件静态资源路径穿越，flag。
+
+## 2026-11-06 批次补充（50 个交付全部收录，全部 flag）
+
+合并自 `汇总/1106/` 的四个 case 包（cases.zip 6、likee2e 17cases 17、12题 12、cases-w2 15），50 个交付全部收录；同一 CVE 的不同实现各占一个目录，主版本为 `CVE-xxxx-yyyy`，重复版本为 `CVE-xxxx-yyyy-alt-<来源>`（`zip` / `17cases` / `yzy` / `w2`），索引见 `cases/_DUP_INDEX.md`。整理后共 102 个 case 目录 / 84 个不同 CVE（17 个 CVE 有多版本，18 个 `-alt-` 目录；flag 89 / crash 13）。s5 适配与逐条来源见 `汇总/1106/整理报告_20261106.md`。
+
+| # | CVE | 组件 / 业务 | 类型 |
+|---|---|---|---|
+| 1 | CVE-2023-27524 | Apache Superset 默认 SECRET_KEY 会话伪造 | 认证绕过 |
+| 2 | CVE-2023-32315 | Openfire 管理控制台认证绕过 | 认证绕过 |
+| 3 | CVE-2024-38856 | Apache OFBiz 未认证 Groovy 注入 | 代码注入 |
+| 4 | CVE-2024-56511 | DataEase 白名单路径穿越认证绕过 | 路径穿越 |
+| 5 | CVE-2025-29927 | Next.js 中间件鉴权绕过 | 认证绕过 |
+| 6 | CVE-2022-22965 | Spring4Shell（Spring MVC 数据绑定） | 代码注入 |
+| 7 | CVE-2023-25826 | OpenTSDB 绘图参数命令注入 | 命令注入 |
+| 8 | CVE-2023-38646 | Metabase 预认证 H2 连接属性注入 | 代码注入 |
+| 9 | CVE-2023-4450 | JimuReport FreeMarker 模板注入 | 代码注入 |
+| 10 | CVE-2023-49070 | Apache OFBiz 预认证 XML-RPC 反序列化 | 反序列化 |
+| 11 | CVE-2023-51467 | Apache OFBiz 认证绕过 + Groovy 注入 | 认证绕过 |
+| 12 | CVE-2024-27348 | Apache HugeGraph Gremlin 沙箱绕过 | 代码注入 |
+| 13 | CVE-2024-36401 | GeoServer WFS 表达式注入 | 代码注入 |
+| 14 | CVE-2024-42323 | Apache HertzBeat SnakeYAML 反序列化 | 反序列化 |
+| 15 | CVE-2024-45195 | Apache OFBiz 强制浏览写 webshell | 代码注入 |
+| 16 | CVE-2024-9264 | Grafana SQL Expressions 注入（DuckDB 文件读取） | 注入 |
+| 17 | CVE-2024-23897 | Jenkins CLI 任意文件读取 | 信息泄露 |
+| 18 | CVE-2024-38819 | Spring WebMvc.fn 静态资源路径穿越 | 路径穿越 |
+| 19 | CVE-2024-46990 | Directus 回环地址 SSRF（/files/import） | SSRF |
+| 20 | CVE-2024-51751 | Gradio 文件读取 | 路径穿越 |
+| 21 | CVE-2024-55657 | SiYuan 任意文件读取 | 路径穿越 |
+| 22 | CVE-2024-55658 | SiYuan 任意文件读取 | 路径穿越 |
+| 23 | CVE-2024-56509 | changedetection.io `file:` URI 绕过读文件 | 文件读取 |
+| 24 | CVE-2025-65958 | Open WebUI 网页导入 SSRF | SSRF |
+| 25 | CVE-2025-68155 | Vite source-map 任意文件读取（RSC Preview Studio） | 路径穿越 |
+| 26 | CVE-2026-104890 | Kunstmaan MediaBundle 上传扩展名黑名单绕过 | 文件上传 |
+| 27 | CVE-2020-1938 | Tomcat AJP Ghostcat 文件读取 | 文件读取 |
+| 28 | CVE-2021-40438 | Apache httpd mod_proxy SSRF | SSRF |
+| 29 | CVE-2022-26134 | Confluence 预认证 OGNL 注入 | 代码注入 |
+| 30 | CVE-2023-22515 | Confluence 未授权属性篡改提权 | 授权问题 |
+| 31 | CVE-2023-22518 | Confluence 未授权恢复上传认证绕过 | 认证绕过 |
+| 32 | CVE-2023-42793 | JetBrains TeamCity 认证绕过 | 认证绕过 |
