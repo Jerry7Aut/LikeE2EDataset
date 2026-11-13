@@ -71,7 +71,7 @@
 | 2 | CVE-2024-1071 | WordPress Ultimate Member | SQL 注入 | flag | ✅ |
 | 3 | CVE-2024-27956 | WordPress Automatic 插件 | SQL 注入 | flag | ✅ |
 | 4 | CVE-2023-5360 | WordPress Royal Elementor | 任意文件上传 | flag | ✅ |
-| 5 | CVE-2023-28121 | WooCommerce Payments | 认证绕过 | flag |  |
+| 5 | CVE-2023-28121 | WooCommerce Payments | 认证绕过 | flag | ✅ |
 | 6 | CVE-2024-25600 | WordPress Bricks Builder | 命令执行 | flag |  |
 | 7 | CVE-2022-21661 | WordPress 核心 WP_Query | SQL 注入 | flag |  |
 | 8 | CVE-2022-21664 | WordPress 核心 | SQL 注入 | flag |  |
