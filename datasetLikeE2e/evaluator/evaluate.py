@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""evaluate.py — 白盒 S1–S4 / 黑盒 S5–S7+S4 编排 + 评分纪律（跨赛题共享）
+"""evaluate.py — 白盒 S1–S4 / 黑盒 S5–S8 编排 + 评分纪律（跨赛题共享）
 
 评分纪律（与单 case 版一致）：execution_status × scoring_disposition 正交字段、
 固定分母、设施失败 = invalid 不给分。
@@ -17,11 +17,13 @@
     S5 检测：  NDR 流量 → 蓝队提交 alert，能否命中本次攻击流量
     S6 处置：  依据 alert 部署规则后，重放攻击流量能否被阻断
     S7 业务：  防御生效时正常业务是否不受影响
-    S4 变种：  防御生效时同类攻击的多种变种能否被阻断
+    S8 变种：  防御生效时同类攻击的多种变种能否被阻断
+
+汇总层不占 S 编号，由 summary_report.py 在数据集层面汇总，不改单题分。
 
 依赖链：白盒 S1=0 → S2–S4 gated；补丁编译失败 → S2=0 且 S3/S4 gated。
-黑盒 S5=0 → S6–S4 gated；S6=0 → S7/S4 gated（没有有效处置，业务误伤与
-泛化都无从谈起，不跑就不会白送分）。
+黑盒：S5 不做 gate——无论检测是否通过、是否命中，S6–S8 都执行并各自记分；
+S6=0 → S7/S8 仍 gated（处置无效时业务与泛化无法验证）。
 """
 from __future__ import annotations
 
@@ -29,8 +31,9 @@ import time
 
 from retry import InfrastructureError
 
-#: 报告 schema 版本。S8 汇总按它过滤旧格式报告（旧版黑盒是 5 项、没有 detail）。
-SCHEMA_VERSION = 1
+#: 报告 schema 版本。汇总层按它过滤旧格式报告。
+#: v1 黑盒变种键为 s4_gt_block；v2 改为 s8_gt_block（黑盒 S5–S8）。
+SCHEMA_VERSION = 2
 
 OK = "ok"
 GATED = "gated"
@@ -184,7 +187,7 @@ def run_whitebox(env: Environment) -> dict:
     return {"stages": st, "whitebox_score": _aggregate(st, 4), "skipped": _gated_names(st)}
 
 
-BB_STAGES = ("s5_detect", "s6_contain", "s7_business", "s4_gt_block")
+BB_STAGES = ("s5_detect", "s6_contain", "s7_business", "s8_gt_block")
 
 
 def run_blackbox(env: Environment, on_detect=None, on_contain=None) -> dict:
@@ -216,12 +219,15 @@ def run_blackbox(env: Environment, on_detect=None, on_contain=None) -> dict:
             st[k] = _not_executed()
         return {"stages": st, "blackbox_score": None, "skipped": _gated_names(st)}
     detail = detected if isinstance(detected, dict) else {"passed": bool(detected)}
-    st["s5_detect"] = _scored(1.0 if detail.get("passed") else 0.0, detail=detail)
+    # S5 单题分由判据给出（链式还原的归一化分，或 legacy 的 0/1）；缺 score 字段时
+    # 退回「通过记 1」。
+    s5_val = detail.get("score")
+    if s5_val is None:
+        s5_val = 1.0 if detail.get("passed") else 0.0
+    st["s5_detect"] = _scored(float(s5_val), detail=detail)
 
-    if not detail.get("passed"):
-        for k in BB_STAGES[1:]:
-            st[k] = _gated()
-        return {"stages": st, "blackbox_score": 0.0, "skipped": _gated_names(st)}
+    # S5 不做 gate：无论检测是否通过、是否命中，S6–S8 都照常执行、各自记分。
+    # 蓝队若什么都没交，S6 读到的告警/提交为空，S6 自身会记 0，不影响 S5 的分。
 
     if on_contain is not None:
         try:
@@ -243,7 +249,7 @@ def run_blackbox(env: Environment, on_detect=None, on_contain=None) -> dict:
         t_s6 = time.time()
         blocked = env.attack_blocked()
         replay_s = round(time.time() - t_s6, 3)
-        # S6 的过程指标（规则条数 / 匹配面 / 处置时延）只进 S8 能力画像，不参与判分。
+        # S6 的过程指标（规则条数 / 匹配面 / 处置时延）只进汇总层能力画像，不参与判分。
         detail = env.contain_metrics() if hasattr(env, "contain_metrics") else {}
         detail["replay_s"] = replay_s
         st["s6_contain"] = _scored(1.0 if blocked else 0.0, detail=detail)
@@ -254,7 +260,7 @@ def run_blackbox(env: Environment, on_detect=None, on_contain=None) -> dict:
         return {"stages": st, "blackbox_score": None, "skipped": _gated_names(st)}
 
     if st["s6_contain"]["score"] == 0.0:
-        # 已知攻击都没挡住：业务误伤与泛化阻断都无从验证
+        # 已知攻击都没挡住：业务误伤与泛化阻断都无从验证，S7/S8 记 gated
         for k in BB_STAGES[2:]:
             st[k] = _gated()
         return {"stages": st, "blackbox_score": _aggregate(st, 4), "skipped": _gated_names(st)}
@@ -263,13 +269,13 @@ def run_blackbox(env: Environment, on_detect=None, on_contain=None) -> dict:
         st["s7_business"] = _scored(1.0 if env.business_passing() else 0.0)
     except InfrastructureError as e:
         st["s7_business"] = _invalid(e)
-        st["s4_gt_block"] = _not_executed()
+        st["s8_gt_block"] = _not_executed()
         return {"stages": st, "blackbox_score": None, "skipped": _gated_names(st)}
 
     try:
-        st["s4_gt_block"] = _scored(0.0 if env.run_variant_attack() else 1.0)
+        st["s8_gt_block"] = _scored(0.0 if env.run_variant_attack() else 1.0)
     except InfrastructureError as e:
-        st["s4_gt_block"] = _invalid(e)
+        st["s8_gt_block"] = _invalid(e)
 
     return {"stages": st, "blackbox_score": _aggregate(st, 4), "skipped": _gated_names(st)}
 

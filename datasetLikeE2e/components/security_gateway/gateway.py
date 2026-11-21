@@ -980,19 +980,19 @@ class DataHandler(socketserver.BaseRequestHandler):
 
 
 def _hdr_brief(headers: Dict[str, str]) -> Dict[str, str]:
-    """只保留可安全暴露给蓝队的 Header 摘要（避免把凭据类 Header 落库）。
+    """保留可安全暴露给蓝队的 Header 摘要。
 
     截断长度由 `GATEWAY_HEADER_BRIEF_CHARS` 控制（默认 1024）。载荷很长的 case
     （例如数 KB 的 php://filter 链）尾部不会出现在摘要里，这是刻意的：判据应当
     落在前缀上，而不依赖某个尾部字面量。规则匹配用完整 Header 值。
+
+    凭据类 Header（Authorization / Cookie）不再脱敏：蓝队的观测面就是网络流量，
+    真实 NDR 同样能看到；而且 `/traffic/<id>?raw=1` 本来就返回完整原始请求，
+    对摘要脱敏提供不了额外保护，反而会让依赖这些头的检测失效。
     """
-    deny = {"authorization", "cookie", "proxy-authorization", "x-auth-token", "set-cookie"}
     out = {}
     for k, v in headers.items():
-        if k in deny:
-            out[k] = "<redacted>"
-        else:
-            out[k] = v[:HEADER_BRIEF_CHARS]
+        out[k] = v[:HEADER_BRIEF_CHARS]
     return out
 
 

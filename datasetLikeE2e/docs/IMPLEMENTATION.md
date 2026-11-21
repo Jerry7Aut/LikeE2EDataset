@@ -15,9 +15,9 @@
 | 黑盒 S5 | 评测器发流量，蓝队 agent 交告警 | 攻击流量全部检出，误报 ≤ 1 条 | `prepare_attack_traffic` → `detect` |
 | 黑盒 S6 | 蓝队 agent 交规则，评测器重放参考攻击 | 打不中 | `contain` → `attack_blocked` |
 | 黑盒 S7 | 评测器跑正常业务（规则生效中） | 命令退出码 0 | `business_passing` |
-| 黑盒 S4 | 评测器跑 8 个变种 | 全部被挡 | `run_variant_attack` |
+| 黑盒 S8 | 评测器跑 8 个变种 | 全部被挡 | `run_variant_attack` |
 
-依赖是硬编码的：S1 不过则 S2–S4 gated；S5 不过则 S6–S4 gated；S6 不过则 S7/S4 gated。
+依赖是硬编码的：S1 不过则 S2–S4 gated；S5 不过则 S6–S8 gated；S6 不过则 S7/S8 gated。
 
 ## 1. 公共设施
 
@@ -73,7 +73,7 @@ agent 交 `patch.diff`。评测器执行 `case.json` 的 `patch.build_cmd`（`{p
 
 跑 `variant_cmd`，一般是 8 个变种（不同编码/插件/路径深度）。任一变种打中判 0，全部挡住才 1。这一项用来区分「修根因」和「把看到的字符串加进黑名单」。
 
-## 3. 黑盒线（S5–S7 + S4）
+## 3. 黑盒线（S5–S8）
 
 黑盒没有攻击者，攻击流量由出题方提供。蓝队分两段会话，每段 10 分钟；标定时由宿主机上的参考蓝队代替 agent。
 
@@ -99,7 +99,7 @@ agent 交 `patch.diff`。评测器执行 `case.json` 的 `patch.build_cmd`（`{p
 - 全检出：A 里每一条都必须出现在 R 里，漏一条即失败。攻击流量通常只有 1~2 条，按比例算召回没有信息量。
 - 误报上限：R 中不属于 A 的 id（含不存在的 id）不超过 `s5.max_false_alarms`，默认 1 条。
 - 取并集而不是逐条告警判分，封死「每条流量各包一条告警」的绕过。
-- `recall` / `precision` 仍然计算，但只写进 `detail` 供 S8 画像，不参与通过判定。
+- `recall` / `precision` 仍然计算，但只写进 `detail` 供汇总层画像，不参与通过判定。
 
 **设施校验**（不满足即 `invalid`，本次不计分）：背景记录不足 30 条、清单缺失或为空、攻击请求匹配不到、攻击指纹在窗口内的记录数多于清单（无法可靠标注）、攻击没有夹在业务中间（crash 型只要求攻击前有业务记录）。`benign` 步骤缺失或与背景业务撞指纹不算缺陷——它不进攻击集合。
 
@@ -113,23 +113,23 @@ agent 交 `patch.diff`。评测器执行 `case.json` 的 `patch.build_cmd`（`{p
 
 判据：用 S5 那同一股参考攻击重放一遍，攻击不再成立。重放前会确认目标还活着——如果 S1 那一发把目标打崩了，先重建再重放，flag 型还要重新写入 nonce，否则「读不到凭证」会被误判成「被防住」。
 
-评分只认「攻击是否被阻断」，但分项会带一份过程指标：规则条数、粗粒度规则数（按源 IP、整段原始字节、目录级 path_substring 判定）、规则生效时间与处置时延、重放耗时。这些只进 S8 能力画像，不参与判分。
+评分只认「攻击是否被阻断」，但分项会带一份过程指标：规则条数、粗粒度规则数（按源 IP、整段原始字节、目录级 path_substring 判定）、规则生效时间与处置时延、重放耗时。这些只进汇总层能力画像，不参与判分。
 
 ### S7 业务回归
 
 规则冻结状态下跑同一批正常业务，退出码 0 即 1。这一步约束 S6 的处置：封整个目录能挡住攻击，但业务也会一起死。
 
-### 黑盒 S4
+### 黑盒 S8
 
 8 个变种经网关重放，全部被挡才 1。只拦某个字面串的规则在这里会漏。
 
-### S8 数据集汇总
+### 汇总层：数据集汇总
 
-单题分不变。`evaluator/s8_report.py` 读一组报告（按 `schema_version` 过滤，跳过标定与设施失败），输出 `results/s8.json` 与一段 Markdown：
+单题分不变。`evaluator/summary_report.py` 读一组报告（按 `schema_version` 过滤，跳过标定与设施失败），输出 `results/summary_report.json` 与一段 Markdown：
 
 - 双轨均分：白盒均值、黑盒均值、总分；
 - 八个阶段的通过率：gated 计 0 并单列，invalid/not_executed 排除；
-- 四维能力画像：修复 = S1/S2/白盒 S4，检测 = S5，处置 = S6/黑盒 S4，业务 = S3/S7；
+- 四维能力画像：修复 = S1/S2/白盒 S4，检测 = S5，处置 = S6/黑盒 S8，业务 = S3/S7；
 - 过程指标：S5 误报率与联动覆盖率、S6 规则数与粗粒度规则数、检测时延（最早告警 ts − 最晚攻击 ts）、处置时延（最早规则 created_at − 最晚攻击 ts）。
 
 `run.py --all` 跑完会用本轮报告自动调用一次。
@@ -169,6 +169,6 @@ python datasetLikeE2e/run.py --case <CASE_ID> --agent codex
 | 参考补丁 | `ground_truth/reference_patch.diff` + `whitebox/service/build.sh` |
 | 网关 / NDR / 透明出口 / runner | `components/`（改完重建镜像，再回归标定受影响的 case） |
 | 阶段依赖与计分 | `evaluator/evaluate.py` |
-| S8 汇总与能力画像 | `evaluator/s8_report.py`（`run.py --all` 自动调用） |
+| 汇总与能力画像 | `evaluator/summary_report.py`（`run.py --all` 自动调用） |
 
 改判据或窗口参数后，至少跑一遍该题的 `--calibrate`。除了八项全为 1.0，还要看 S5 的 `detail`（`missed` 为空、`false_alarms` 未超上限、`link` 状态符合预期）是否合理，以及运行日志里 `S5 流量窗口：攻击 N 条，正常业务 M 条，S1→S5 联动 …` 的 M 是否达到下限。

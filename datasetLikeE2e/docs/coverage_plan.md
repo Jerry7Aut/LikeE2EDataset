@@ -69,8 +69,8 @@
 |---|---|---|---|---|---|
 | 1 | CVE-2023-6553 | WordPress Backup Migration 插件 | 过滤器链 RCE | flag | ✅ |
 | 2 | CVE-2024-1071 | WordPress Ultimate Member | SQL 注入 | flag | ✅ |
-| 3 | CVE-2024-27956 | WordPress Automatic 插件 | SQL 注入 | flag | ✅ |
-| 4 | CVE-2023-5360 | WordPress Royal Elementor | 任意文件上传 | flag | ✅ |
+| 3 | CVE-2024-27956 | WordPress Automatic 插件 | SQL 注入 | flag |  |
+| 4 | CVE-2023-5360 | WordPress Royal Elementor | 任意文件上传 | flag |  |
 | 5 | CVE-2023-28121 | WooCommerce Payments | 认证绕过 | flag |  |
 | 6 | CVE-2024-25600 | WordPress Bricks Builder | 命令执行 | flag |  |
 | 7 | CVE-2022-21661 | WordPress 核心 WP_Query | SQL 注入 | flag |  |
@@ -299,25 +299,29 @@
 | 1 | CVE-2024-53677 ✅ | Apache Struts2 | 文件上传 RCE | flag |
 | 2 | CVE-2023-50164 ✅ | Apache Struts2 | 路径穿越与文件上传 | flag |
 | 3 | CVE-2022-22963 ✅ | Spring Cloud Function | SpEL 注入 RCE | flag |
-| 4 | CVE-2021-21234 | Spring Boot Actuator 日志查看 | 路径穿越 | flag |
-| 5 | CVE-2022-42889 | Apache Commons Text | 表达式注入 RCE | flag |
+| 4 | CVE-2021-21234 ✅ | Spring Boot Actuator 日志查看 | 路径穿越 | flag |
+| 5 | CVE-2022-42889 ✅ | Apache Commons Text | 表达式注入 RCE | flag |
 | 6 | CVE-2022-25845 ✅ | fastjson | 反序列化 RCE | flag |
-| 7 | CVE-2022-1471 | SnakeYAML | 反序列化 RCE | flag |
-| 8 | CVE-2020-17519 | Apache Flink | 路径穿越 | flag |
-| 9 | CVE-2021-36749 | Apache Druid | 路径穿越 | flag |
-| 10 | CVE-2024-36401 | GeoServer | XPath 注入 RCE | flag |
-| 11 | CVE-2021-44790 | Apache httpd mod_lua | 缓冲区溢出 | crash |
-| 12 | CVE-2021-36160 | Apache httpd mod_proxy_uwsgi | 越界读 | crash |
-| 13 | CVE-2021-23017 | nginx resolver | 越界写 | crash |
-| 14 | CVE-2022-41741 | nginx mp4 模块 | 内存破坏 | crash |
-| 15 | CVE-2023-4863 | libwebp | 堆溢出 | crash |
-| 16 | CVE-2022-37434 | zlib inflate | 堆溢出 | crash |
-| 17 | CVE-2022-23308 | libxml2 | 释放后使用 | crash |
-| 18 | CVE-2022-25313 | Expat | 栈耗尽 | crash |
-| 19 | CVE-2022-27404 | FreeType | 堆溢出 | crash |
-| 20 | CVE-2022-29824 | libxml2 | 整数溢出 | crash |
+| 7 | CVE-2022-1471 ✅ | SnakeYAML | 反序列化 RCE | flag |
+| 8 | CVE-2020-17519 ✅ | Apache Flink | 路径穿越 | flag |
+| 9 | CVE-2021-36749 ✅ | Apache Druid | 路径穿越 | flag |
+| 10 | CVE-2024-36401 ✅ | GeoServer | XPath 注入 RCE | flag |
+| 11 | CVE-2021-44790 ✅ | Apache httpd mod_lua | 缓冲区溢出 | crash |
+| 12 | CVE-2021-36160 ✅ | Apache httpd mod_proxy_uwsgi | 越界读 | crash |
+| 13 | CVE-2021-23017 ✅ | nginx resolver | 越界写 | crash |
+| 14 | CVE-2022-41741 ✅ | nginx mp4 模块 | 内存破坏 | crash |
+| 15 | CVE-2023-4863 ✅ | libwebp | 堆溢出 | crash |
+| 16 | CVE-2022-37434 ✅ | zlib inflate | 堆溢出 | crash |
+| 17 | CVE-2022-23308 ✅ | libxml2 | 释放后使用 | crash |
+| 18 | CVE-2022-25313 ✅ | Expat | 栈耗尽 | crash |
+| 19 | CVE-2022-27404 ✅ | FreeType | 堆溢出 | crash |
+| 20 | CVE-2022-29824 ❌ | libxml2 | 整数溢出 | crash |
 
 组 11 的 crash 项需要 ASAN 构建并设置溢出即 abort，否则部分漏洞在普通构建下不一定退出进程。flag 项可直接经网关触发，或按 24928 的方式包装成 HTTP 服务。
+
+**CVE-2022-29824 判定不可行**：32 位 `needSize` 回绕要求单次 4 GiB 级分配，没有小输入替身；ASAN 实测单次触发 276 秒、峰值 RSS 6 GiB。评测器每条命令限时 600 秒，S4 需跑 ≥8 个变种，且 OOM kill 与真实崩溃不可区分。替代候选：CVE-2022-40304、CVE-2024-56171、CVE-2022-2309（均为 libxml2，小输入可触发）。
+
+**2026-11-09 补齐**：本组 21 题中 20 题已交付并标定 `final_score=1.0`（八阶段全绿），CVE-2022-29824 不可行。CVE-2021-21234 的白盒源码取自本题自带的 `blackbox/target/app/`（`logview/ + portal/` 多模块工程，上游 `lib/` 布局不适用）；CVE-2024-36401 的构建脚本修复了 Git Bash/MSYS 把容器路径 `/out`、`/src` 当盘符转换的问题（`cygpath -w` + `MSYS_NO_PATHCONV=1`）。
 
 **已完成补充**：CVE-2021-43798 Grafana 8.2.0，插件静态资源路径穿越，flag。
 
@@ -359,3 +363,17 @@
 | 30 | CVE-2023-22515 | Confluence 未授权属性篡改提权 | 授权问题 |
 | 31 | CVE-2023-22518 | Confluence 未授权恢复上传认证绕过 | 认证绕过 |
 | 32 | CVE-2023-42793 | JetBrains TeamCity 认证绕过 | 认证绕过 |
+
+
+## 2026-11-11 批次：跨站请求伪造与后置链接
+
+| # | CVE | 承载项目 | 类型 | 判据 | 状态 |
+|---|---|---|---|---|---|
+| 1 | CVE-2020-36193 | pear/Archive_Tar 1.4.11 + DockVault 归档服务 | 后置链接（解包符号链接越界） | flag | ✅ 标定 1.0 |
+| 2 | CVE-2021-32610 | pear/Archive_Tar 1.4.13 + EvidenceVault 取证归档 | 后置链接（相对链深度绕过） | flag | ✅ 标定 1.0 |
+| 3 | CVE-2023-29003 | SvelteKit 1.15.0 + Release Console | 跨站请求伪造（text/plain 绕过） | flag | ✅ 标定 1.0 |
+| 4 | CVE-2023-29008 | SvelteKit 1.15.1 + Release Console | 跨站请求伪造（Content-Type 大小写绕过） | flag | ✅ 标定 1.0 |
+| 5 | CVE-2023-26840 | ChurchCRM 4.5.3 + MySQL | 跨站请求伪造（用户管理提权，连带 CVE-2023-26841） | flag | ✅ 标定 1.0 |
+| 6 | CVE-2020-29529 | hashicorp/go-slug 0.4.3 + BundleDeck 发布服务 | 后置链接（路径前缀混淆写穿） | flag | ✅ 标定 1.0 |
+
+后置链接第三题最终采用 CVE-2020-29529：go-slug 0.4.3 解包时对目标路径只做字符串前缀校验，'/srv/site-data-public' 以解包根 '/srv/site-data' 为前缀，符号链接可把 PHP 文件写进发布根；0.5.0 的逐组件 Lstat 检查阻断。

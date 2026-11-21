@@ -35,12 +35,14 @@ def _run(cmd, **kw):
 
 
 def run_agent(case_dir, mode, role, agent=None, custom_entrypoint=None,
-              submission_dir=None, log_file=None, image=IMAGE, timeout=1800,
+              submission_dir=None, log_file=None, log_dir=None, image=IMAGE, timeout=1800,
               build=False, team_env_path=None, case_env_path=None, phase=None) -> int:
     """跑一个 agent 容器产出交付物，返回退出码（0=正常，非 0=该阶段记 0 分）。
 
     phase 仅对黑盒防御者有意义：同一个 defender 角色分两段会话，
     s5 看 NDR 流量交告警、s6 读告警部署规则。
+    log_dir 为 S5 日志快照目录（每服务一个 .log）：挂到 /challenge/logs 只读，
+    同时把文件清单写进 task.json 的 task.log_dir / task.log_files，由 prompt 渲染。
     """
     case = os.path.abspath(case_dir)
     spec_path = os.path.join(case, "agent_task.json")
@@ -90,6 +92,12 @@ def run_agent(case_dir, mode, role, agent=None, custom_entrypoint=None,
 
     # 1. 生成 task.json（临时文件，供挂载）
     task = gen_task.build(gen_task.load_spec(spec_path), mode, role, timeout, phase=phase)
+    # S5 日志快照：把目录与文件清单写进任务契约，prompt.py 据此渲染日志段落。
+    # 只对黑盒防御者生效；文件挂到 /challenge/logs 只读。
+    if role == "defender" and log_dir and os.path.isdir(log_dir):
+        log_files = sorted(f for f in os.listdir(log_dir) if f.endswith(".log"))
+        task["task"]["log_dir"] = "/challenge/logs"
+        task["task"]["log_files"] = log_files
     tmp = tempfile.mkdtemp(prefix="agent_task_")
     task_path = os.path.join(tmp, "task.json")
     with open(task_path, "w", encoding="utf-8") as f:
@@ -122,7 +130,10 @@ def run_agent(case_dir, mode, role, agent=None, custom_entrypoint=None,
         cmd += ["-v", f"{prompt_py}:/opt/agent/prompt.py:ro"]
     if mode == "whitebox":
         cmd += ["-v", f"{os.path.join(case, 'whitebox', 'source')}:/challenge/source:ro"]
-    if role == "defender" and log_file:
+    if role == "defender" and log_dir and os.path.isdir(log_dir):
+        cmd += ["-v", f"{os.path.abspath(log_dir)}:/challenge/logs:ro"]
+    elif role == "defender" and log_file:
+        # 旧接口：单个日志文件。与 log_dir 互斥（同一挂载点）。
         cmd += ["-v", f"{os.path.abspath(log_file)}:/challenge/logs/app.log:ro"]
 
     for k, v in model.items():
@@ -189,6 +200,8 @@ def main():
     ap.add_argument("--custom-entrypoint", default=None)
     ap.add_argument("--submission-dir", default=None, help="缺省 = <case-dir>/submission")
     ap.add_argument("--log-file", default=None, help="黑盒防御者：宿主上的应用日志路径")
+    ap.add_argument("--log-dir", default=None,
+                    help="黑盒防御者：S5 日志快照目录（每服务一个 .log），挂到 /challenge/logs")
     ap.add_argument("--image", default=IMAGE)
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--build", action="store_true", help="先 docker build agent 镜像")
@@ -198,7 +211,7 @@ def main():
 
     rc = run_agent(a.case_dir, a.mode, a.role, agent=a.agent,
                    custom_entrypoint=a.custom_entrypoint,
-                   submission_dir=a.submission_dir, log_file=a.log_file,
+                   submission_dir=a.submission_dir, log_file=a.log_file, log_dir=a.log_dir,
                    image=a.image, timeout=a.timeout, build=a.build,
                    team_env_path=a.team_env, case_env_path=a.case_env)
     sys.exit(rc)

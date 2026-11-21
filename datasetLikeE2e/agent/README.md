@@ -96,7 +96,7 @@ python datasetLikeE2e/agent/host_run.py \
 `case.json` 完成（**出题人不写评测代码**）。`generic_env.py --run-agent` 已把 agent
 接入闭环：白盒攻击者（poc.bin + patch.diff）→ 出题方攻击流量进 NDR → 蓝队检测会话
 （读 `/traffic` + 交 `/alerts`）→ 蓝队处置会话（读 `/alerts` + 部署 `/rules`），
-S5/S6/S4 按「部署后的真实重放效果」判分。黑盒线没有攻击者角色。`alerts.json` 与
+S5/S6/S8 按「部署后的真实重放效果」判分。黑盒线没有攻击者角色。`alerts.json` 与
 `block.policy` 只是存档形式（自然语言/JSON 均可），不参与判分 —— 防御的**真实交付物是
 NDR 里实际提交的告警与规则**。
 

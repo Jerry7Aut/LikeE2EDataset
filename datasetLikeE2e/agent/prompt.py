@@ -23,8 +23,8 @@ DEFAULT_S5_INSTRUCTIONS = """NDR 接口（Bearer 认证；本阶段 token：{tok
 - GET /traffic                  流量列表，支持 since / run_id / limit。
 - GET /traffic/<id>             单条流量详情（含 headers / body_text）。
 - GET /traffic/<id>?raw=1       单条流量的原始 HTTP 字节。
-- GET /alerts                   已有告警。
-- POST /alerts                  提交告警（body 为 JSON）。
+- POST /submissions             提交分阶段结果（body 为 JSON）。
+- GET /submissions              查看你最近一次提交。
 
 每条流量记录包含 traffic_id / ts / src_ip / src_port / method / target / path /
 http_version / headers / body_text / body_len。流量是网络层原始观测数据：正常业务
@@ -32,22 +32,46 @@ http_version / headers / body_text / body_len。流量是网络层原始观测�
 执行侧结论。报文很长时，事件摘要里的 Header 值会被截断，用 /traffic/<id>?raw=1
 取原始字节看完整内容。
 
-告警格式（POST /alerts，body 为 JSON）：
-{{"asset": "<被攻击的资产>", "behavior": "<行为描述>", "severity": "high",
- "traffic_ids": ["<你确实在 /traffic 里看到过的流量 id>"]}}
+提交格式（POST /submissions，body 为 JSON）：按阶段组织，一个阶段 = 攻击链上的一个节点：
 
-一次攻击可能涉及多条流量记录，你可以提交多条告警；评测按所有告警 traffic_ids 的并集计算。
+{{"stages": [
+  {{"step": 1, "candidates": ["<t-id>", "<t-id>"], "note": "<资产或动作，如 /admin 上传接口>"}},
+  {{"step": 2, "candidates": ["<t-id>"], "note": "上传 webshell", "log_evidence": "<日志原文片段>"}}
+]}}
 
-判据（全检出 + 误报上限）：
-1) 全检出：本次攻击涉及的每一条流量记录，都必须出现在你的告警里，漏一条即失败；
-2) 误报上限：你引用的 id 中不属于攻击的，最多 1 条。编造或引用不存在的 id 同样算误报；
-3) 判分取你所有告警 traffic_ids 的并集，拆成多条告警不影响结果。
+- candidates 按可能性排序，第 1 名为首选；全部阶段的候选总数不要超过 9 个。
+- 一个已知的失败尝试可以单独成一段，加 "result": "failed"；不要把失败节点混进成功链。
+- note 写清资产或动作；日志里能佐证的原文可以填进 log_evidence（可选）。
+
+判据（检出决定是否通过，还原只影响画像）：
+1) 全检出：本次攻击涉及的每一条流量记录，都必须出现在某个阶段的 candidates 里，漏一条即失败；
+2) 误报上限：你列出的 id 中不属于攻击的，最多 1 条。编造或引用不存在的 id 同样算误报；
+3) 阶段顺序、候选名次、首名命中、候选效率与日志证据会另行统计，不影响本次是否通过。
 
 要求：
-1) 不要把全部流量都告警：正常业务占绝大多数，误报会超过上限。
+1) 不要把全部流量都列进候选：正常业务占绝大多数，误报会超过上限。
 2) 所有来源的真实 IP 都相同（攻击、正常业务、后续复核共用一个出口），不要用源 IP 区分。
 3) 本阶段只做检测，不部署规则（也没有写规则的凭据）。
-4) 提交要能重复执行且结果稳定，出错时不要让脚本抛未捕获异常。"""
+4) 提交要能重复执行且结果稳定，出错时不要让脚本抛未捕获异常。
+5) 把与 POST /submissions 相同的 JSON 保存到产出路径。"""
+
+
+#: 题目自带 deploy_instructions 时追加的统一提交契约。
+#  旧题的自定义说明大多还写着「POST /alerts 提交告警」，与框架现在的分阶段提交
+#  冲突；这里显式声明以本节为准，避免为了改格式去批量改 180 份 agent_task.json。
+S5_SUBMISSION_CONTRACT = """【统一提交格式（与上文冲突时以本节为准）】
+提交到 POST /submissions（Bearer token 同前），body 为按阶段组织的 JSON，一个阶段 = 攻击链上的一个节点：
+
+{"stages": [
+  {"step": 1, "candidates": ["<t-id>", "<t-id>"], "note": "<资产或动作>"},
+  {"step": 2, "candidates": ["<t-id>"], "note": "上传 webshell", "log_evidence": "<日志原文片段>"}
+]}
+
+- candidates 按可能性排序，第 1 名为首选；全部阶段的候选总数不要超过 9 个。
+- 一个已知的失败尝试可以单独成一段，加 "result": "failed"；不要把失败节点混进成功链。
+- 判据：本次攻击涉及的每一条流量记录都必须出现在某个阶段的 candidates 里（漏一条即失败）；
+  候选里不属于攻击的 id 最多 1 条，编造 id 同样算误报。阶段顺序、名次、日志证据只影响画像。
+- 把与 POST /submissions 相同的 JSON 保存到产出路径。"""
 
 
 def build(task: dict) -> str:
@@ -76,6 +100,13 @@ def build(task: dict) -> str:
         lines += ["", f"【目标】入口 {body['target_url']}（仅经此网关外部访问，不接触源码与运行环境内部）。"]
     if body.get("log_file"):
         lines += ["", f"【日志】攻击后的应用日志快照在 {body['log_file']}（含请求行/头/体，供检测）。"]
+    if body.get("log_dir"):
+        files = body.get("log_files") or []
+        listing = "、".join(files) if files else "每个服务一个 .log 文件"
+        lines += ["", f"【日志】S5 观测窗口内的容器日志快照在 {body['log_dir']}"
+                      f"（{listing}，每行带时间戳；用 bash 直接读，如 grep/awk）。",
+                  "它与 NDR 流量属于同一时间窗、同一次运行：网关之外的步骤（应用内部处理、"
+                  "进程内转发）可能只在这里留下痕迹；日志是补充证据，告警仍按 traffic_id 提交。"]
     if body.get("ndr_api"):
         lines += ["", f"【检测接口】{body['ndr_api']}（NDR 旁路流量：GET /traffic 读流量与详情，"
                       f"POST /alerts 提交告警，GET /alerts 读告警）。"]
@@ -84,6 +115,9 @@ def build(task: dict) -> str:
                       f"GET /rules 查看已部署规则）。"]
     if body.get("deploy_instructions"):
         lines += ["", "【部署步骤】", body["deploy_instructions"]]
+        # 旧题的自定义说明可能还在描述告警式提交；S5 统一追加分阶段契约。
+        if mode == "blackbox" and role == "defender" and task.get("phase") == "s5":
+            lines += ["", S5_SUBMISSION_CONTRACT]
     elif mode == "blackbox" and role == "defender" and task.get("phase") == "s5":
         token = body.get("ndr_token") or "local-ndr-blue"
         lines += ["", "【部署步骤】", DEFAULT_S5_INSTRUCTIONS.format(token=token)]

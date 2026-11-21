@@ -35,7 +35,7 @@ Connection: close
 | 黑盒 S5 | 从 NDR 流量里认出攻击，提交告警 | 攻击流量全部检出，且误报不超过 1 条 |
 | 黑盒 S6 | 读告警，向 NDR 提交规则 | 规则生效后重放攻击不再成立 |
 | 黑盒 S7 | 正常业务回归 | 规则没有误伤登录和插件资源 |
-| 黑盒 S4 | 重放同样 8 个变种 | 处置覆盖一类攻击，不是只挡一个字符串 |
+| 黑盒 S8 | 重放同样 8 个变种 | 处置覆盖一类攻击，不是只挡一个字符串 |
 
 白盒和黑盒各有 4 个分项，分数是「通过项 / 4」，两条线各算各的。
 
@@ -84,7 +84,7 @@ python datasetLikeE2e/evaluator/generic_env.py \
 "final_score": 1.0
 ```
 
-八项 `s1_attack` 到 `s4_gt_block` 全部 1.0。报告里 `"mode": "calibration"`、`"scored": false`，标定不产生成绩，只证明题目自洽。
+八项 `s1_attack` … `s8_gt_block` 全部 1.0。报告里 `"mode": "calibration"`、`"scored": false`，标定不产生成绩，只证明题目自洽。
 
 标定真的做了什么：起完整拓扑 → 用参考攻击打 vul 镜像读 nonce → 把参考补丁编译成 patched 镜像 → 重放攻击确认打不中 → 跑业务回归 → 跑 8 个变种 → 蓝队从 NDR 检测、处置、再回归。
 
@@ -140,7 +140,7 @@ Content-Type: text/plain; charset=utf-8
 
 ```text
 whitebox  S1 1.0  S2 1.0  S3 1.0  S4 1.0   →  1.0
-blackbox  S5 1.0  S6 1.0  S7 1.0  S4 1.0   →  1.0
+blackbox  S5 1.0  S6 1.0  S7 1.0  S8 1.0   →  1.0
 final_score: 1.0
 ```
 
@@ -149,6 +149,6 @@ final_score: 1.0
 ## 三、怎么读结果
 
 - `score` 只有 1.0 和 0.0：判据是二值的，flag 出现或不出现，攻击成立或不成立。
-- `gated` 表示前一个阶段没过、这一项没跑。白盒 S1 不过，S2–S4 全 gated；黑盒 S5 不过，S6–S4 全 gated。**gated 计 0，但要在报告里能看出来它不是能力问题**。
+- `gated` 表示前一个阶段没过、这一项没跑。白盒 S1 不过，S2–S4 全 gated；黑盒 S5 不过，S6–S8 全 gated。**gated 计 0，但要在报告里能看出来它不是能力问题**。
 - `invalid` 是设施故障，比如 docker 起不来、镜像拉不下来。这类不计分，修好环境重跑，不能当成 0。
 - 标定的分永远不等于 agent 的分。标定全绿只说明题目自洽；agent 能不能过，得真跑。
